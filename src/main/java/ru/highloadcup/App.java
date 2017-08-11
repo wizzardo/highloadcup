@@ -28,8 +28,8 @@ public class App extends WebApplication {
     Map<Integer, Location> locations;
     Map<Integer, Visit> visits;
 
-    Map<Integer, List<Visit>> visitsByUser;
-    Map<Integer, List<Visit>> visitsByLocation;
+    Map<Integer, List<VisitInfo>> visitsByUser;
+    Map<Integer, List<VisitInfo>> visitsByLocation;
 
     public App(String[] args) {
         super(args);
@@ -38,46 +38,46 @@ public class App extends WebApplication {
             a.getUrlMapping()
                     .append("/users/$id/visits", new RestHandler().get((request, response) -> {
                         int id = request.params().getInt("id", -1);
-                        List<Visit> visitList = visitsByUser.get(id);
+                        List<VisitInfo> visitList = visitsByUser.get(id);
                         if (visitList == null)
                             return response.status(Status._404)
                                     .appendHeader(Header.KV_CONNECTION_CLOSE);
 
-                        Stream<Visit> stream = visitList.stream();
+                        Stream<VisitInfo> stream = visitList.stream();
                         try {
                             String s;
                             s = request.param("fromDate");
                             if (s != null) {
                                 long fromDate = Long.parseLong(s);
-                                stream = stream.filter(visit -> visit.visited_at > fromDate); //todo put into tree-map
+                                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at > fromDate); //todo put into tree-map
                             }
                             s = request.param("toDate");
                             if (s != null) {
                                 long toDate = Long.parseLong(s);
-                                stream = stream.filter(visit -> visit.visited_at < toDate); //todo put into tree-map
+                                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at < toDate); //todo put into tree-map
                             }
                             s = request.param("toDistance");
                             if (s != null) {
                                 long toDistance = Integer.parseInt(s);
-                                stream = stream.filter(visit -> locations.get(visit.location).distance < toDistance); //todo cache
+                                stream = stream.filter(visitInfo -> visitInfo.location.distance < toDistance);
                             }
                             s = request.param("country");
                             if (s != null) {
                                 String country = s;
-                                stream = stream.filter(visit -> country.equals(locations.get(visit.location).country)); //todo cache
+                                stream = stream.filter(visitInfo -> country.equals(visitInfo.location.country));
                             }
                         } catch (Exception e) {
                             return response.status(Status._400)
                                     .appendHeader(Header.KV_CONNECTION_CLOSE);
                         }
 
-                        List<VisitView> results = stream.sorted(Comparator.comparingLong(o -> o.visited_at))
-                                .map(visit -> new VisitView(visit.mark, visit.visited_at, locations.get(visit.location).place))
+                        List<VisitView> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at))
+                                .map(visitInfo -> new VisitView(visitInfo.visit.mark, visitInfo.visit.visited_at, visitInfo.location.place))
                                 .collect(Collectors.toList());
 
-                        if (results.isEmpty())
-                            return response.status(Status._404)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+//                        if (results.isEmpty())
+//                            return response.status(Status._404)
+//                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
 
                         return response
                                 .setBody(JsonTools.serialize(new VisitViews(results)))
@@ -86,59 +86,60 @@ public class App extends WebApplication {
                     }))
                     .append("/locations/$id/avg", new RestHandler().get((request, response) -> {
                         int id = request.params().getInt("id", -1);
-                        List<Visit> visitList = visitsByLocation.get(id);
+                        List<VisitInfo> visitList = visitsByLocation.get(id);
                         if (visitList == null)
                             return response.status(Status._404)
                                     .appendHeader(Header.KV_CONNECTION_CLOSE);
 
+                        Stream<VisitInfo> stream = visitList.stream();
                         try {
-                            Stream<Visit> stream = visitList.stream();
 
                             String s;
                             s = request.param("fromDate");
                             if (s != null) {
                                 long fromDate = Long.parseLong(s);
-                                stream = stream.filter(visit -> visit.visited_at > fromDate); //todo put into tree-map
+                                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at > fromDate); //todo put into tree-map
                             }
                             s = request.param("toDate");
                             if (s != null) {
                                 long toDate = Long.parseLong(s);
-                                stream = stream.filter(visit -> visit.visited_at < toDate); //todo put into tree-map
+                                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at < toDate); //todo put into tree-map
                             }
                             s = request.param("fromAge");
                             if (s != null) {
                                 int fromAge = Integer.parseInt(s);
                                 long ageValue = System.currentTimeMillis() - fromAge * 1000l * 60 * 60 * 24 * 365;
-                                stream = stream.filter(visit -> users.get(visit.user).birth_date < ageValue); //todo cache
+                                stream = stream.filter(visit -> visit.user.birth_date < ageValue);
                             }
                             s = request.param("toAge");
                             if (s != null) {
                                 int toAge = Integer.parseInt(s);
                                 long ageValue = System.currentTimeMillis() - toAge * 1000l * 60 * 60 * 24 * 365;
-                                stream = stream.filter(visit -> users.get(visit.user).birth_date > ageValue); //todo cache
+                                stream = stream.filter(visit -> visit.user.birth_date > ageValue);
                             }
                             s = request.param("gender");
                             if (s != null) {
                                 User.Gender gender = User.Gender.valueOf(s);
-                                stream = stream.filter(visit -> users.get(visit.user).gender == gender); //todo cache
+                                stream = stream.filter(visit -> visit.user.gender == gender);
                             }
 
-                            OptionalDouble average = stream.sorted(Comparator.comparingLong(o -> o.visited_at))
-                                    .mapToDouble(value -> value.mark)
-                                    .average();
-
-                            if (!average.isPresent())
-                                return response.status(Status._404)
-                                        .appendHeader(Header.KV_CONNECTION_CLOSE);
-
-                            return response
-                                    .setBody(JsonTools.serialize(new Average(Math.round(average.getAsDouble() * 100000) / 100000d)))
-                                    .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
                         } catch (Exception e) {
                             return response.status(Status._400)
                                     .appendHeader(Header.KV_CONNECTION_CLOSE);
                         }
+
+                        OptionalDouble average = stream
+                                .mapToDouble(visitInfo -> visitInfo.visit.mark)
+                                .average();
+
+                        if (!average.isPresent())
+                            return response.status(Status._404)
+                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+
+                        return response
+                                .setBody(JsonTools.serialize(new Average(Math.round(average.getAsDouble() * 100000) / 100000d)))
+                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+                                .appendHeader(Header.KV_CONNECTION_CLOSE);
                     }))
                     .append("/users/$id", new RestHandler()
                             .get((request, response) -> {
@@ -421,8 +422,10 @@ public class App extends WebApplication {
         this.visitsByUser = new HashMap<>(this.users.size() + 1, 1f);
         this.visitsByLocation = new HashMap<>(this.locations.size() + 1, 1f);
         for (Visit visit : visits.visits) {
-            visitsByUser.computeIfAbsent(visit.user, integer -> new ArrayList<>(16)).add(visit);
-            visitsByLocation.computeIfAbsent(visit.location, integer -> new ArrayList<>(16)).add(visit);
+            visitsByUser.computeIfAbsent(visit.user, integer -> new ArrayList<>(16))
+                    .add(new VisitInfo(visit, this.locations.get(visit.location), this.users.get(visit.user)));
+            visitsByLocation.computeIfAbsent(visit.location, integer -> new ArrayList<>(16))
+                    .add(new VisitInfo(visit, this.locations.get(visit.location), this.users.get(visit.user)));
         }
     }
 
