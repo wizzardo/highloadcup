@@ -24,8 +24,8 @@ ENV PATH=${PATH}:/opt/jdk1.8.0_101/bin JAVA_HOME=/opt/jdk1.8.0_101
 # Копируем наш исходный main.go внутрь контейнера, в папку go/src/dumb
 ADD build/libs/solution-all-1.0-SNAPSHOT.jar /opt/solution.jar
 
-# Открываем 8080-й порт наружу
-EXPOSE 8080
+# Открываем 80-й порт наружу
+EXPOSE 80
 
 # Запускаем наш сервер
 CMD java -jar /opt/solution.jar env=prod

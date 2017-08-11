@@ -4,7 +4,6 @@ import com.wizzardo.http.RestHandler;
 import com.wizzardo.http.framework.WebApplication;
 import com.wizzardo.http.request.Header;
 import com.wizzardo.http.response.Status;
-import com.wizzardo.tools.io.FileTools;
 import com.wizzardo.tools.io.IOTools;
 import com.wizzardo.tools.io.ZipTools;
 import com.wizzardo.tools.json.JsonTools;
@@ -16,7 +15,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -62,6 +60,11 @@ public class App extends WebApplication {
                             if (s != null) {
                                 long toDistance = Integer.parseInt(s);
                                 stream = stream.filter(visit -> locations.get(visit.location).distance < toDistance); //todo cache
+                            }
+                            s = request.param("country");
+                            if (s != null) {
+                                String country = s;
+                                stream = stream.filter(visit -> country.equals(locations.get(visit.location).country)); //todo cache
                             }
                         } catch (Exception e) {
                             return response.status(Status._400)
@@ -143,9 +146,10 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
+                                    return response.status(Status._404)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                                 }
+
                                 User user = users.get(id);
                                 if (user == null)
                                     return response.status(Status._404)
@@ -170,26 +174,30 @@ public class App extends WebApplication {
                                     return response.status(Status._404)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
 
+                                User update;
                                 try {
-                                    User update = JsonTools.parse(request.getBody().bytes(), User.class);
-                                    if (update.email != null)
-                                        user.email = update.email;
-                                    if (update.first_name != null)
-                                        user.first_name = update.first_name;
-                                    if (update.last_name != null)
-                                        user.last_name = update.last_name;
-                                    if (update.gender != null)
-                                        user.gender = update.gender;
-                                    if (update.birth_date != 0)
-                                        user.birth_date = update.birth_date;
-                                    return response
-                                            .setBody("{}")
-                                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    update = JsonTools.parse(request.getBody().bytes(), User.class);
                                 } catch (Exception e) {
                                     return response.status(Status._400)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                                 }
+
+                                System.out.println("update user, data: " + new String(request.getBody().bytes()));
+
+                                if (update.email != null)
+                                    user.email = update.email;
+                                if (update.first_name != null)
+                                    user.first_name = update.first_name;
+                                if (update.last_name != null)
+                                    user.last_name = update.last_name;
+                                if (update.gender != null)
+                                    user.gender = update.gender;
+                                if (update.birth_date != 0)
+                                    user.birth_date = update.birth_date;
+                                return response
+                                        .setBody("{}")
+                                        .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+                                        .appendHeader(Header.KV_CONNECTION_CLOSE);
                             })
                     )
                     .append("/locations/$id", new RestHandler()
@@ -198,7 +206,7 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
+                                    return response.status(Status._404)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                                 }
 
@@ -217,7 +225,7 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
+                                    return response.status(Status._404)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                                 }
 
@@ -362,6 +370,17 @@ public class App extends WebApplication {
             System.out.println("locations: " + locations.size());
             System.out.println("visits: " + visits.size());
             System.out.println("visits by user: " + visitsByUser.size());
+
+            System.out.println();
+            System.out.println("location.132: " + locations.get(132));
+            System.out.println("visits by location.132: " + visitsByLocation.get(132));
+            System.out.println();
+            System.out.println("location.133: " + locations.get(133));
+            System.out.println("visits by location.133: " + visitsByLocation.get(133));
+            System.out.println();
+            System.out.println("location.218: " + locations.get(218));
+            System.out.println("visits by location.218: " + visitsByLocation.get(218));
+            System.out.println();
         });
     }
 

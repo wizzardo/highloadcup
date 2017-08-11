@@ -15,4 +15,15 @@ public class Location implements WithId {
     public int id() {
         return id;
     }
+
+    @Override
+    public String toString() {
+        return "Location{" +
+                "id=" + id +
+                ", place='" + place + '\'' +
+                ", country='" + country + '\'' +
+                ", city='" + city + '\'' +
+                ", distance=" + distance +
+                '}';
+    }
 }

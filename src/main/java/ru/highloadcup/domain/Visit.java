@@ -14,4 +14,15 @@ public class Visit implements WithId {
     public int id() {
         return id;
     }
+
+    @Override
+    public String toString() {
+        return "Visit{" +
+                "id=" + id +
+                ", location=" + location +
+                ", user=" + user +
+                ", visited_at=" + visited_at +
+                ", mark=" + mark +
+                '}';
+    }
 }
