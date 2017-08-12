@@ -28,5 +28,5 @@ ADD build/libs/solution-all-1.0-SNAPSHOT.jar /opt/solution.jar
 EXPOSE 80
 
 # Запускаем наш сервер
-CMD java -jar /opt/solution.jar env=prod
+CMD java -Xmx3G -Xms256m -XX:+AggressiveOpts -jar /opt/solution.jar env=prod
 

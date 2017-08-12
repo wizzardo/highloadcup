@@ -17,4 +17,13 @@ public class VisitInfo {
         this.location = location;
         this.user = user;
     }
+
+    @Override
+    public String toString() {
+        return "VisitInfo{" +
+                "visit=" + visit +
+                ", location=" + location +
+                ", user=" + user +
+                '}';
+    }
 }

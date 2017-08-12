@@ -19,4 +19,16 @@ public class User implements WithId {
     public int id() {
         return id;
     }
+
+    @Override
+    public String toString() {
+        return "User{" +
+                "id=" + id +
+                ", email='" + email + '\'' +
+                ", first_name='" + first_name + '\'' +
+                ", last_name='" + last_name + '\'' +
+                ", birth_date=" + birth_date +
+                ", gender=" + gender +
+                '}';
+    }
 }
