@@ -130,7 +130,7 @@ public class App extends WebApplication {
                             s = request.param("fromAge");
                             if (s != null) {
                                 int fromAge = Integer.parseInt(s);
-                                long ageValue = LocalDateTime.now().minus(fromAge, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC);
+                                long ageValue = LocalDateTime.now().minus(fromAge, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC); //todo cache years in arrya
 //                                long ageValue = System.currentTimeMillis() - fromAge * 1000l * 60 * 60 * 24 * 365;
                                 stream = stream.filter(visit -> visit.user.birth_date < ageValue);
                             }
@@ -207,8 +207,6 @@ public class App extends WebApplication {
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                                 }
 
-                                System.out.println("update user, data: " + new String(request.getBody().bytes()));
-
                                 if (update.email != null)
                                     user.email = update.email;
                                 if (update.first_name != null)
@@ -220,7 +218,6 @@ public class App extends WebApplication {
                                 if (update.birth_date != 0)
                                     user.birth_date = update.birth_date;
 
-                                request.connection().setCloseOnFinishWriting(true);
                                 return response
                                         .setBody("{}")
                                         .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -278,7 +275,6 @@ public class App extends WebApplication {
                                 if (update.distance != 0)
                                     location.distance = update.distance;
 
-                                request.connection().setCloseOnFinishWriting(true);
                                 return response
                                         .setBody("{}")
                                         .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -325,6 +321,8 @@ public class App extends WebApplication {
                                     return response.status(Status._400)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                                 }
+
+
                                 if (update.location != 0)
                                     visit.location = update.location;
                                 if (update.user != 0)
@@ -334,7 +332,6 @@ public class App extends WebApplication {
                                 if (update.visited_at != 0)
                                     visit.visited_at = update.visited_at;
 
-                                request.connection().setCloseOnFinishWriting(true);
                                 return response
                                         .setBody("{}")
                                         .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -344,14 +341,12 @@ public class App extends WebApplication {
                     .append("/users/new", new RestHandler().post((request, response) -> {
                         try {
                             User update = JsonTools.parse(request.getBody().bytes(), User.class);
-                            System.out.println("new user: " + update);
                             User user = users.get(update.id);
                             if (user != null)
-                                return response.status(Status._404)
+                                return response.status(Status._400)
                                         .appendHeader(Header.KV_CONNECTION_CLOSE);
 
                             users.put(update.id, update); //todo update other collections
-                            request.connection().setCloseOnFinishWriting(true);
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -366,11 +361,10 @@ public class App extends WebApplication {
                             Location update = JsonTools.parse(request.getBody().bytes(), Location.class);
                             Location location = locations.get(update.id);
                             if (location != null)
-                                return response.status(Status._404)
+                                return response.status(Status._400)
                                         .appendHeader(Header.KV_CONNECTION_CLOSE);
 
                             locations.put(update.id, update); //todo update other collections
-                            request.connection().setCloseOnFinishWriting(true);
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -385,11 +379,10 @@ public class App extends WebApplication {
                             Visit update = JsonTools.parse(request.getBody().bytes(), Visit.class);
                             Visit visit = visits.get(update.id);
                             if (visit != null)
-                                return response.status(Status._404)
+                                return response.status(Status._400)
                                         .appendHeader(Header.KV_CONNECTION_CLOSE);
 
                             visits.put(update.id, update); //todo update other collections
-                            request.connection().setCloseOnFinishWriting(true);
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -404,10 +397,10 @@ public class App extends WebApplication {
     }
 
     public static void main(String[] args) {
-        Stopwatch stopwatch = new Stopwatch("App started in", true);
+        long time = System.currentTimeMillis();
         App app = new App(args);
         app.start();
-        System.out.println(stopwatch);
+        System.out.println("App started in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
         warmUp(app);
     }
 
