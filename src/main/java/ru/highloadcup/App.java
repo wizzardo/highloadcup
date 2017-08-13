@@ -1,11 +1,16 @@
 package ru.highloadcup;
 
+import com.wizzardo.epoll.readable.ReadableByteBuffer;
 import com.wizzardo.http.RestHandler;
 import com.wizzardo.http.framework.WebApplication;
 import com.wizzardo.http.request.Header;
+import com.wizzardo.http.response.Response;
 import com.wizzardo.http.response.Status;
 import com.wizzardo.tools.http.Request;
+import com.wizzardo.tools.interfaces.Mapper;
 import com.wizzardo.tools.io.IOTools;
+import com.wizzardo.tools.json.JsonItem;
+import com.wizzardo.tools.json.JsonObject;
 import com.wizzardo.tools.json.JsonTools;
 import com.wizzardo.tools.misc.Stopwatch;
 import com.wizzardo.tools.misc.Unchecked;
@@ -34,6 +39,7 @@ public class App extends WebApplication {
 
     Map<Integer, List<VisitInfo>> visitsByUser;
     Map<Integer, List<VisitInfo>> visitsByLocation;
+    long[] years;
 
     public App(String[] args) {
         super(args);
@@ -58,6 +64,9 @@ public class App extends WebApplication {
 //        System.out.println();
 
         onSetup(a -> {
+//            ReadableByteBuffer static_400 = new Response().status(Status._400).appendHeader(Header.KV_CONNECTION_CLOSE).buildStaticResponse();
+            Mapper<Response, Response> response_400 = (response) -> response.status(Status._400).appendHeader(Header.KV_CONNECTION_CLOSE);
+
             a.getUrlMapping()
                     .append("/users/$id/visits", new RestHandler().get((request, response) -> {
                         int id = request.params().getInt("id", -1);
@@ -90,8 +99,7 @@ public class App extends WebApplication {
                                 stream = stream.filter(visitInfo -> country.equals(visitInfo.location.country));
                             }
                         } catch (Exception e) {
-                            return response.status(Status._400)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                            return response_400.map(response);
                         }
 
                         List<VisitView> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at))
@@ -130,14 +138,14 @@ public class App extends WebApplication {
                             s = request.param("fromAge");
                             if (s != null) {
                                 int fromAge = Integer.parseInt(s);
-                                long ageValue = LocalDateTime.now().minus(fromAge, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC); //todo cache years in arrya
+                                long ageValue = getSecondsFromAge(fromAge);
 //                                long ageValue = System.currentTimeMillis() - fromAge * 1000l * 60 * 60 * 24 * 365;
                                 stream = stream.filter(visit -> visit.user.birth_date < ageValue);
                             }
                             s = request.param("toAge");
                             if (s != null) {
                                 int toAge = Integer.parseInt(s);
-                                long ageValue = LocalDateTime.now().minus(toAge, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC);
+                                long ageValue = getSecondsFromAge(toAge);
 //                                long ageValue = System.currentTimeMillis() - toAge * 1000l * 60 * 60 * 24 * 365;
                                 stream = stream.filter(visit -> visit.user.birth_date > ageValue);
                             }
@@ -148,8 +156,7 @@ public class App extends WebApplication {
                             }
 
                         } catch (Exception e) {
-                            return response.status(Status._400)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                            return response_400.map(response);
                         }
 
                         OptionalDouble average = stream
@@ -190,7 +197,7 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
+                                    return response.status(Status._404) // todo: cache all 404 and 400 responses as statics
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                                 }
 
@@ -199,24 +206,37 @@ public class App extends WebApplication {
                                     return response.status(Status._404)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
 
-                                User update;
                                 try {
-                                    update = JsonTools.parse(request.getBody().bytes(), User.class);
+                                    JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
+                                    JsonItem item;
+                                    if ((item = update.get("email")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        user.email = item.asString();
+                                    }
+                                    if ((item = update.get("first_name")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        user.first_name = item.asString();
+                                    }
+                                    if ((item = update.get("last_name")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        user.last_name = item.asString();
+                                    }
+                                    if ((item = update.get("gender")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        user.gender = User.Gender.valueOf(item.asString());
+                                    }
+                                    if ((item = update.get("birth_date")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        user.birth_date = item.asLong();
+                                    }
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    return response_400.map(response);
                                 }
-
-                                if (update.email != null)
-                                    user.email = update.email;
-                                if (update.first_name != null)
-                                    user.first_name = update.first_name;
-                                if (update.last_name != null)
-                                    user.last_name = update.last_name;
-                                if (update.gender != null)
-                                    user.gender = update.gender;
-                                if (update.birth_date != 0)
-                                    user.birth_date = update.birth_date;
 
                                 return response
                                         .setBody("{}")
@@ -258,22 +278,32 @@ public class App extends WebApplication {
                                     return response.status(Status._404)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
 
-                                Location update;
                                 try {
-                                    update = JsonTools.parse(request.getBody().bytes(), Location.class);
+                                    JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
+                                    JsonItem item;
+                                    if ((item = update.get("country")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        location.country = item.asString();
+                                    }
+                                    if ((item = update.get("city")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        location.city = item.asString();
+                                    }
+                                    if ((item = update.get("place")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        location.place = item.asString();
+                                    }
+                                    if ((item = update.get("distance")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        location.distance = item.asInteger();
+                                    }
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    return response_400.map(response);
                                 }
-
-                                if (update.place != null)
-                                    location.place = update.place;
-                                if (update.country != null)
-                                    location.country = update.country;
-                                if (update.city != null)
-                                    location.city = update.city;
-                                if (update.distance != 0)
-                                    location.distance = update.distance;
 
                                 return response
                                         .setBody("{}")
@@ -287,8 +317,7 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    return response_400.map(response);
                                 }
                                 Visit visit = visits.get(id);
                                 if (visit == null)
@@ -305,8 +334,7 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    return response_400.map(response);
                                 }
 
                                 Visit visit = visits.get(id);
@@ -318,10 +346,8 @@ public class App extends WebApplication {
                                 try {
                                     update = JsonTools.parse(request.getBody().bytes(), Visit.class);
                                 } catch (Exception e) {
-                                    return response.status(Status._400)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    return response_400.map(response);
                                 }
-
 
                                 if (update.location != 0)
                                     visit.location = update.location;
@@ -340,38 +366,56 @@ public class App extends WebApplication {
                     )
                     .append("/users/new", new RestHandler().post((request, response) -> {
                         try {
-                            User update = JsonTools.parse(request.getBody().bytes(), User.class);
+                            UserUpdate update = JsonTools.parse(request.getBody().bytes(), UserUpdate.class);
+                            if (update.id == null || update.birth_date == null || update.first_name == null
+                                    || update.last_name == null || update.email == null || update.gender == null)
+                                return response_400.map(response);
+
                             User user = users.get(update.id);
                             if (user != null)
-                                return response.status(Status._400)
-                                        .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                return response_400.map(response);
 
-                            users.put(update.id, update); //todo update other collections
+                            user = new User();
+                            user.birth_date = update.birth_date;
+                            user.first_name = update.first_name;
+                            user.last_name = update.last_name;
+                            user.id = update.id;
+                            user.gender = update.gender;
+                            user.email = update.email;
+
+                            users.put(update.id, user); //todo update other collections
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                                     .appendHeader(Header.KV_CONNECTION_CLOSE);
                         } catch (Exception e) {
-                            return response.status(Status._400)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                            return response_400.map(response);
                         }
                     }))
                     .append("/locations/new", new RestHandler().post((request, response) -> {
                         try {
-                            Location update = JsonTools.parse(request.getBody().bytes(), Location.class);
+                            LocationUpdate update = JsonTools.parse(request.getBody().bytes(), LocationUpdate.class);
+                            if (update.id == null || update.city == null || update.country == null
+                                    || update.place == null || update.distance == null)
+                                return response_400.map(response);
+
                             Location location = locations.get(update.id);
                             if (location != null)
-                                return response.status(Status._400)
-                                        .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                return response_400.map(response);
 
-                            locations.put(update.id, update); //todo update other collections
+                            location = new Location();
+                            location.id = update.id;
+                            location.distance = update.distance;
+                            location.city = update.city;
+                            location.country = update.country;
+                            location.place = update.place;
+                            locations.put(update.id, location); //todo update other collections
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                                     .appendHeader(Header.KV_CONNECTION_CLOSE);
                         } catch (Exception e) {
-                            return response.status(Status._400)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                            return response_400.map(response);
                         }
                     }))
                     .append("/visits/new", new RestHandler().post((request, response) -> {
@@ -379,8 +423,7 @@ public class App extends WebApplication {
                             Visit update = JsonTools.parse(request.getBody().bytes(), Visit.class);
                             Visit visit = visits.get(update.id);
                             if (visit != null)
-                                return response.status(Status._400)
-                                        .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                return response_400.map(response);
 
                             visits.put(update.id, update); //todo update other collections
                             return response
@@ -388,12 +431,18 @@ public class App extends WebApplication {
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                                     .appendHeader(Header.KV_CONNECTION_CLOSE);
                         } catch (Exception e) {
-                            return response.status(Status._400)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                            return response_400.map(response);
                         }
                     }))
             ;
         });
+    }
+
+    public long getSecondsFromAge(int age) {
+        if (age < years.length)
+            return years[age];
+        else
+            return LocalDateTime.now().minus(age, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC);
     }
 
     public static void main(String[] args) {
@@ -401,7 +450,11 @@ public class App extends WebApplication {
         App app = new App(args);
         app.start();
         System.out.println("App started in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
-        warmUp(app);
+
+        for (int i = 0; i < 10; i++) {
+            warmUp(app);
+            Unchecked.ignore(() -> Thread.sleep(1000));
+        }
     }
 
     private static void warmUp(App app) {
@@ -478,6 +531,12 @@ public class App extends WebApplication {
             visitsByLocation.computeIfAbsent(location.id, integer -> new ArrayList<>(16));
         }
         System.out.println(stopwatch);
+
+        long[] years = new long[256];
+        for (int i = 0; i < years.length; i++) {
+            years[i] = LocalDateTime.now().minus(i, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC);
+        }
+        this.years = years;
     }
 
     protected <T extends WithId> Map<Integer, T> initMap(List<T> data) {

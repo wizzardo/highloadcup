@@ -19,6 +19,7 @@ public class PostTest {
                 .json(new JsonObject()
                         .append("email", "wibylcudestiwuk@icloud.com")
 //                        .append("email", "12312")
+                        .append("birth_date", "ololo")
                         .toString()
                 ).post();
 
