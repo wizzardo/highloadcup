@@ -197,7 +197,7 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._404) // todo: cache all 404 and 400 responses as statics
+                                    return response.status(Status._404)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                                 }
 
@@ -349,11 +349,17 @@ public class App extends WebApplication {
                                     return response_400.map(response);
                                 }
 
-                                if (update.location != 0)
+                                if (update.location != 0 && update.location != visit.location) {
+                                    visitsByLocation.get(visit.location).removeIf(visitInfo -> visitInfo.visit == visit);
                                     visit.location = update.location;
-                                if (update.user != 0)
+                                    addToVisitsByLocation(visit);
+                                }
+                                if (update.user != 0 && update.user != visit.user) {
+                                    visitsByUser.get(visit.user).removeIf(visitInfo -> visitInfo.visit == visit);
                                     visit.user = update.user;
-                                if (update.mark != 0)
+                                    addToVisitsByUser(visit);
+                                }
+                                if (update.mark != 0) //todo replace with VisitUpdate and Long value
                                     visit.mark = update.mark;
                                 if (update.visited_at != 0)
                                     visit.visited_at = update.visited_at;
@@ -383,7 +389,8 @@ public class App extends WebApplication {
                             user.gender = update.gender;
                             user.email = update.email;
 
-                            users.put(update.id, user); //todo update other collections
+                            users.put(update.id, user);
+                            visitsByUser.computeIfAbsent(update.id, integer -> new ArrayList<VisitInfo>(16));
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -409,7 +416,8 @@ public class App extends WebApplication {
                             location.city = update.city;
                             location.country = update.country;
                             location.place = update.place;
-                            locations.put(update.id, location); //todo update other collections
+                            locations.put(update.id, location);
+                            visitsByLocation.computeIfAbsent(update.id, integer -> new ArrayList<VisitInfo>(16));
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -425,7 +433,8 @@ public class App extends WebApplication {
                             if (visit != null)
                                 return response_400.map(response);
 
-                            visits.put(update.id, update); //todo update other collections
+                            visits.put(update.id, update);
+                            addToVisitMaps(update);
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -438,11 +447,26 @@ public class App extends WebApplication {
         });
     }
 
+    public void addToVisitMaps(Visit visit) {
+        addToVisitsByUser(visit);
+        addToVisitsByLocation(visit);
+    }
+
+    public void addToVisitsByLocation(Visit visit) {
+        visitsByLocation.computeIfAbsent(visit.location, integer -> new ArrayList<>(16))
+                .add(new VisitInfo(visit, locations.get(visit.location), users.get(visit.user)));
+    }
+
+    public void addToVisitsByUser(Visit visit) {
+        visitsByUser.computeIfAbsent(visit.user, integer -> new ArrayList<>(16))
+                .add(new VisitInfo(visit, locations.get(visit.location), users.get(visit.user)));
+    }
+
     public long getSecondsFromAge(int age) {
         if (age < years.length)
             return years[age];
         else
-            return LocalDateTime.now().minus(age, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC);
+            return getSecondsOfAge(age);
     }
 
     public static void main(String[] args) {
@@ -451,10 +475,22 @@ public class App extends WebApplication {
         app.start();
         System.out.println("App started in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
 
+        Runtime runtime = Runtime.getRuntime();
+        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+        System.out.println("run GC");
+        System.gc();
+        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
         for (int i = 0; i < 10; i++) {
             warmUp(app);
             Unchecked.ignore(() -> Thread.sleep(1000));
         }
+
+        System.gc();
+        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+    }
+
+    public static String formatBytes(long bytes) {
+        return bytes / 1024 / 1024 + " mb";
     }
 
     private static void warmUp(App app) {
@@ -491,13 +527,13 @@ public class App extends WebApplication {
             ByteArrayOutputStream out = new ByteArrayOutputStream(1024 * 1024);
             while ((nextEntry = zip.getNextEntry()) != null) {
                 String name = nextEntry.getName();
-                Stopwatch stopwatch = new Stopwatch("reading data from " + name, true);
+//                Stopwatch stopwatch = new Stopwatch("reading data from " + name, true);
                 IOTools.copy(zip, out, buffer);
                 String json = out.toString();
                 out.reset();
-                System.out.println(stopwatch);
+//                System.out.println(stopwatch);
 
-                stopwatch = new Stopwatch("parsing data from " + name, true);
+//                stopwatch = new Stopwatch("parsing data from " + name, true);
                 if (name.startsWith("locations"))
                     locations.locations.addAll(JsonTools.parse(json, Locations.class).locations);
                 else if (name.startsWith("users"))
@@ -506,7 +542,7 @@ public class App extends WebApplication {
                     visits.visits.addAll(JsonTools.parse(json, Visits.class).visits);
                 else
                     throw new IllegalArgumentException("Unknown file: " + name);
-                System.out.println(stopwatch);
+//                System.out.println(stopwatch);
             }
             IOTools.close(zip);
         });
@@ -519,10 +555,7 @@ public class App extends WebApplication {
         this.visitsByUser = new HashMap<>(this.users.size() + 1, 1f);
         this.visitsByLocation = new HashMap<>(this.locations.size() + 1, 1f);
         for (Visit visit : visits.visits) {
-            visitsByUser.computeIfAbsent(visit.user, integer -> new ArrayList<>(16))
-                    .add(new VisitInfo(visit, this.locations.get(visit.location), this.users.get(visit.user)));
-            visitsByLocation.computeIfAbsent(visit.location, integer -> new ArrayList<>(16))
-                    .add(new VisitInfo(visit, this.locations.get(visit.location), this.users.get(visit.user)));
+            addToVisitMaps(visit);
         }
         for (User user : users.users) {
             visitsByUser.computeIfAbsent(user.id, integer -> new ArrayList<>(16));
@@ -534,9 +567,13 @@ public class App extends WebApplication {
 
         long[] years = new long[256];
         for (int i = 0; i < years.length; i++) {
-            years[i] = LocalDateTime.now().minus(i, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC);
+            years[i] = getSecondsOfAge(i);
         }
         this.years = years;
+    }
+
+    private long getSecondsOfAge(int i) {
+        return LocalDateTime.now().minus(i, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC); // todo reset current time
     }
 
     protected <T extends WithId> Map<Integer, T> initMap(List<T> data) {
