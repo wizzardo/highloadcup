@@ -1,6 +1,5 @@
 package ru.highloadcup;
 
-import com.wizzardo.epoll.readable.ReadableByteBuffer;
 import com.wizzardo.http.RestHandler;
 import com.wizzardo.http.framework.WebApplication;
 import com.wizzardo.http.request.Header;
@@ -24,6 +23,8 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -41,6 +42,8 @@ public class App extends WebApplication {
     Map<Integer, List<VisitInfo>> visitsByLocation;
     long[] years;
 
+    AtomicBoolean posts = new AtomicBoolean(false);
+
     public App(String[] args) {
         super(args);
 
@@ -52,23 +55,13 @@ public class App extends WebApplication {
         System.out.println("visits: " + visits.size());
         System.out.println("visits by user: " + visitsByUser.size());
 
-//        System.out.println();
-//        System.out.println("user.1031: " + users.get(1031));
-//        System.out.println("visits by user.1031: " + visitsByUser.get(1031));
-//        System.out.println();
-//        System.out.println("location.132: " + locations.get(132));
-//        System.out.println("visits by location.132: " + visitsByLocation.get(132));
-//        System.out.println();
-//        System.out.println("location.218: " + locations.get(218));
-//        System.out.println("visits by location.218: " + visitsByLocation.get(218));
-//        System.out.println();
-
         onSetup(a -> {
 //            ReadableByteBuffer static_400 = new Response().status(Status._400).appendHeader(Header.KV_CONNECTION_CLOSE).buildStaticResponse();
             Mapper<Response, Response> response_400 = (response) -> response.status(Status._400).appendHeader(Header.KV_CONNECTION_CLOSE);
 
             a.getUrlMapping()
                     .append("/users/$id/visits", new RestHandler().get((request, response) -> {
+                        unmarkPosts();
                         int id = request.params().getInt("id", -1);
                         List<VisitInfo> visitList = visitsByUser.get(id);
                         if (visitList == null)
@@ -116,6 +109,7 @@ public class App extends WebApplication {
                                 .appendHeader(Header.KV_CONNECTION_CLOSE);
                     }))
                     .append("/locations/$id/avg", new RestHandler().get((request, response) -> {
+                        unmarkPosts();
                         int id = request.params().getInt("id", -1);
                         List<VisitInfo> visitList = visitsByLocation.get(id);
                         if (visitList == null)
@@ -163,10 +157,6 @@ public class App extends WebApplication {
                                 .mapToDouble(visitInfo -> visitInfo.visit.mark)
                                 .average();
 
-//                        if (!average.isPresent())
-//                            return response.status(Status._404)
-//                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
-
                         return response
                                 .setBody(JsonTools.serialize(new Average(Math.round(average.orElse(0) * 100000) / 100000d)))
                                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -174,6 +164,7 @@ public class App extends WebApplication {
                     }))
                     .append("/users/$id", new RestHandler()
                             .get((request, response) -> {
+                                unmarkPosts();
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
@@ -193,6 +184,8 @@ public class App extends WebApplication {
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                             })
                             .post((request, response) -> {
+                                markPosts();
+
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
@@ -246,6 +239,7 @@ public class App extends WebApplication {
                     )
                     .append("/locations/$id", new RestHandler()
                             .get((request, response) -> {
+                                unmarkPosts();
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
@@ -265,6 +259,7 @@ public class App extends WebApplication {
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                             })
                             .post((request, response) -> {
+                                markPosts();
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
@@ -313,6 +308,7 @@ public class App extends WebApplication {
                     )
                     .append("/visits/$id", new RestHandler()
                             .get((request, response) -> {
+                                unmarkPosts();
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
@@ -330,6 +326,7 @@ public class App extends WebApplication {
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
                             })
                             .post((request, response) -> {
+                                markPosts();
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
@@ -342,27 +339,39 @@ public class App extends WebApplication {
                                     return response.status(Status._404)
                                             .appendHeader(Header.KV_CONNECTION_CLOSE);
 
-                                Visit update;
                                 try {
-                                    update = JsonTools.parse(request.getBody().bytes(), Visit.class);
+                                    JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
+                                    JsonItem item;
+
+                                    if ((item = update.get("user")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+
+                                        removeFromVisitMaps(visit);
+                                        visit.user = item.asInteger();
+                                        addToVisitMaps(visit);
+                                    }
+                                    if ((item = update.get("location")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+
+                                        removeFromVisitMaps(visit);
+                                        visit.location = item.asInteger();
+                                        addToVisitMaps(visit);
+                                    }
+                                    if ((item = update.get("mark")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        visit.mark = item.asInteger();
+                                    }
+                                    if ((item = update.get("visited_at")) != null) {
+                                        if (item.isNull())
+                                            return response_400.map(response);
+                                        visit.visited_at = item.asLong();
+                                    }
                                 } catch (Exception e) {
                                     return response_400.map(response);
                                 }
-
-                                if (update.location != 0 && update.location != visit.location) {
-                                    visitsByLocation.get(visit.location).removeIf(visitInfo -> visitInfo.visit == visit);
-                                    visit.location = update.location;
-                                    addToVisitsByLocation(visit);
-                                }
-                                if (update.user != 0 && update.user != visit.user) {
-                                    visitsByUser.get(visit.user).removeIf(visitInfo -> visitInfo.visit == visit);
-                                    visit.user = update.user;
-                                    addToVisitsByUser(visit);
-                                }
-                                if (update.mark != 0) //todo replace with VisitUpdate and Long value
-                                    visit.mark = update.mark;
-                                if (update.visited_at != 0)
-                                    visit.visited_at = update.visited_at;
 
                                 return response
                                         .setBody("{}")
@@ -371,6 +380,7 @@ public class App extends WebApplication {
                             })
                     )
                     .append("/users/new", new RestHandler().post((request, response) -> {
+                        markPosts();
                         try {
                             UserUpdate update = JsonTools.parse(request.getBody().bytes(), UserUpdate.class);
                             if (update.id == null || update.birth_date == null || update.first_name == null
@@ -390,7 +400,7 @@ public class App extends WebApplication {
                             user.email = update.email;
 
                             users.put(update.id, user);
-                            visitsByUser.computeIfAbsent(update.id, integer -> new ArrayList<VisitInfo>(16));
+                            visitsByUser.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -400,6 +410,7 @@ public class App extends WebApplication {
                         }
                     }))
                     .append("/locations/new", new RestHandler().post((request, response) -> {
+                        markPosts();
                         try {
                             LocationUpdate update = JsonTools.parse(request.getBody().bytes(), LocationUpdate.class);
                             if (update.id == null || update.city == null || update.country == null
@@ -417,7 +428,7 @@ public class App extends WebApplication {
                             location.country = update.country;
                             location.place = update.place;
                             locations.put(update.id, location);
-                            visitsByLocation.computeIfAbsent(update.id, integer -> new ArrayList<VisitInfo>(16));
+                            visitsByLocation.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -427,6 +438,7 @@ public class App extends WebApplication {
                         }
                     }))
                     .append("/visits/new", new RestHandler().post((request, response) -> {
+                        markPosts();
                         try {
                             Visit update = JsonTools.parse(request.getBody().bytes(), Visit.class);
                             Visit visit = visits.get(update.id);
@@ -447,19 +459,40 @@ public class App extends WebApplication {
         });
     }
 
+    public void removeFromVisitMaps(Visit visit) {
+        visitsByUser.get(visit.user).removeIf(visitInfo -> visitInfo.visit.id == visit.id);
+        visitsByLocation.get(visit.location).removeIf(visitInfo -> visitInfo.visit.id == visit.id);
+    }
+
+    public void markPosts() {
+        if (posts.compareAndSet(false, true)) {
+            System.out.println("============== POSTS ==============");
+        }
+    }
+
+    public void unmarkPosts() {
+        if (posts.compareAndSet(true, false)) {
+            System.out.println("============== GETS 2 ==============");
+        }
+    }
+
     public void addToVisitMaps(Visit visit) {
         addToVisitsByUser(visit);
         addToVisitsByLocation(visit);
     }
 
     public void addToVisitsByLocation(Visit visit) {
-        visitsByLocation.computeIfAbsent(visit.location, integer -> new ArrayList<>(16))
-                .add(new VisitInfo(visit, locations.get(visit.location), users.get(visit.user)));
+        visitsByLocation.computeIfAbsent(visit.location, integer -> new CopyOnWriteArrayList<>())
+                .add(createVisitInfo(visit));
+    }
+
+    public VisitInfo createVisitInfo(Visit visit) {
+        return new VisitInfo(visit, locations.get(visit.location), users.get(visit.user));
     }
 
     public void addToVisitsByUser(Visit visit) {
-        visitsByUser.computeIfAbsent(visit.user, integer -> new ArrayList<>(16))
-                .add(new VisitInfo(visit, locations.get(visit.location), users.get(visit.user)));
+        visitsByUser.computeIfAbsent(visit.user, integer -> new CopyOnWriteArrayList<>())
+                .add(createVisitInfo(visit));
     }
 
     public long getSecondsFromAge(int age) {
@@ -475,18 +508,18 @@ public class App extends WebApplication {
         app.start();
         System.out.println("App started in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
 
-        Runtime runtime = Runtime.getRuntime();
-        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
-        System.out.println("run GC");
-        System.gc();
-        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
-        for (int i = 0; i < 10; i++) {
-            warmUp(app);
-            Unchecked.ignore(() -> Thread.sleep(1000));
-        }
-
-        System.gc();
-        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+//        Runtime runtime = Runtime.getRuntime();
+//        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+//        System.out.println("run GC");
+//        System.gc();
+//        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+//        for (int i = 0; i < 10; i++) {
+//            warmUp(app);
+//            Unchecked.ignore(() -> Thread.sleep(1000));
+//        }
+//
+//        System.gc();
+//        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
     }
 
     public static String formatBytes(long bytes) {
@@ -551,9 +584,9 @@ public class App extends WebApplication {
         this.locations = initMap(locations.locations);
         this.visits = initMap(visits.visits);
 
-        Stopwatch stopwatch = new Stopwatch("init maps of visits by location and user", true);
-        this.visitsByUser = new HashMap<>(this.users.size() + 1, 1f);
-        this.visitsByLocation = new HashMap<>(this.locations.size() + 1, 1f);
+//        Stopwatch stopwatch = new Stopwatch("init maps of visits by location and user", true);
+        this.visitsByUser = new ConcurrentHashMap<>(this.users.size() + 1, 1f);
+        this.visitsByLocation = new ConcurrentHashMap<>(this.locations.size() + 1, 1f);
         for (Visit visit : visits.visits) {
             addToVisitMaps(visit);
         }
@@ -563,11 +596,12 @@ public class App extends WebApplication {
         for (Location location : locations.locations) {
             visitsByLocation.computeIfAbsent(location.id, integer -> new ArrayList<>(16));
         }
-        System.out.println(stopwatch);
+//        System.out.println(stopwatch);
 
         long[] years = new long[256];
         for (int i = 0; i < years.length; i++) {
             years[i] = getSecondsOfAge(i);
+//            System.out.println("age " + i + ": " + years[i]);
         }
         this.years = years;
     }
@@ -577,12 +611,12 @@ public class App extends WebApplication {
     }
 
     protected <T extends WithId> Map<Integer, T> initMap(List<T> data) {
-        Stopwatch stopwatch = new Stopwatch("init map of " + data.get(0).getClass(), true);
+//        Stopwatch stopwatch = new Stopwatch("init map of " + data.get(0).getClass(), true);
         Map<Integer, T> map = new ConcurrentHashMap<>(data.size() + 1, 1f);
         for (T t : data) {
             map.put(t.id(), t);
         }
-        System.out.println(stopwatch);
+//        System.out.println(stopwatch);
         return map;
     }
 }
