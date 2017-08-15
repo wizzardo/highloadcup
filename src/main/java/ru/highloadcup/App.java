@@ -54,6 +54,7 @@ public class App extends WebApplication {
         System.out.println("locations: " + locations.size());
         System.out.println("visits: " + visits.size());
         System.out.println("visits by user: " + visitsByUser.size());
+        System.out.println("visits by location: " + visitsByLocation.size());
 
         onSetup(a -> {
 //            ReadableByteBuffer static_400 = new Response().status(Status._400).appendHeader(Header.KV_CONNECTION_CLOSE).buildStaticResponse();
@@ -201,30 +202,25 @@ public class App extends WebApplication {
 
                                 try {
                                     JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-                                    JsonItem item;
-                                    if ((item = update.get("email")) != null) {
+                                    for (JsonItem item : update.values()) {
                                         if (item.isNull())
                                             return response_400.map(response);
+                                    }
+
+                                    JsonItem item;
+                                    if ((item = update.get("email")) != null) {
                                         user.email = item.asString();
                                     }
                                     if ((item = update.get("first_name")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         user.first_name = item.asString();
                                     }
                                     if ((item = update.get("last_name")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         user.last_name = item.asString();
                                     }
                                     if ((item = update.get("gender")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         user.gender = User.Gender.valueOf(item.asString());
                                     }
                                     if ((item = update.get("birth_date")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         user.birth_date = item.asLong();
                                     }
                                 } catch (Exception e) {
@@ -275,25 +271,22 @@ public class App extends WebApplication {
 
                                 try {
                                     JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-                                    JsonItem item;
-                                    if ((item = update.get("country")) != null) {
+                                    for (JsonItem item : update.values()) {
                                         if (item.isNull())
                                             return response_400.map(response);
+                                    }
+
+                                    JsonItem item;
+                                    if ((item = update.get("country")) != null) {
                                         location.country = item.asString();
                                     }
                                     if ((item = update.get("city")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         location.city = item.asString();
                                     }
                                     if ((item = update.get("place")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         location.place = item.asString();
                                     }
                                     if ((item = update.get("distance")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         location.distance = item.asInteger();
                                     }
                                 } catch (Exception e) {
@@ -341,32 +334,26 @@ public class App extends WebApplication {
 
                                 try {
                                     JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-                                    JsonItem item;
-
-                                    if ((item = update.get("user")) != null) {
+                                    for (JsonItem item : update.values()) {
                                         if (item.isNull())
                                             return response_400.map(response);
+                                    }
 
+                                    JsonItem item;
+                                    if ((item = update.get("user")) != null) {
                                         removeFromVisitMaps(visit);
                                         visit.user = item.asInteger();
                                         addToVisitMaps(visit);
                                     }
                                     if ((item = update.get("location")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
-
                                         removeFromVisitMaps(visit);
                                         visit.location = item.asInteger();
                                         addToVisitMaps(visit);
                                     }
                                     if ((item = update.get("mark")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         visit.mark = item.asInteger();
                                     }
                                     if ((item = update.get("visited_at")) != null) {
-                                        if (item.isNull())
-                                            return response_400.map(response);
                                         visit.visited_at = item.asLong();
                                     }
                                 } catch (Exception e) {
@@ -508,18 +495,18 @@ public class App extends WebApplication {
         app.start();
         System.out.println("App started in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
 
-//        Runtime runtime = Runtime.getRuntime();
-//        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
-//        System.out.println("run GC");
-//        System.gc();
-//        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
-//        for (int i = 0; i < 10; i++) {
-//            warmUp(app);
-//            Unchecked.ignore(() -> Thread.sleep(1000));
-//        }
-//
-//        System.gc();
-//        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+        Runtime runtime = Runtime.getRuntime();
+        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+        System.out.println("run GC");
+        System.gc();
+        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+        for (int i = 0; i < 10; i++) {
+            warmUp(app);
+            Unchecked.ignore(() -> Thread.sleep(1000));
+        }
+
+        System.gc();
+        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
     }
 
     public static String formatBytes(long bytes) {
