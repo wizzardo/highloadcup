@@ -1,13 +1,11 @@
 package ru.highloadcup;
 
 import com.wizzardo.epoll.readable.ReadableByteBuffer;
-import com.wizzardo.http.FileTreeHandler;
 import com.wizzardo.http.RestHandler;
 import com.wizzardo.http.framework.WebApplication;
 import com.wizzardo.http.request.Header;
 import com.wizzardo.http.response.Response;
 import com.wizzardo.http.response.Status;
-import com.wizzardo.tools.http.Request;
 import com.wizzardo.tools.interfaces.Mapper;
 import com.wizzardo.tools.io.IOTools;
 import com.wizzardo.tools.json.JsonItem;
@@ -47,6 +45,7 @@ public class App extends WebApplication {
     long[] years;
 
     AtomicBoolean posts = new AtomicBoolean(false);
+    long dataLength;
 
     public App(String[] args) {
         super(args);
@@ -60,7 +59,7 @@ public class App extends WebApplication {
         System.out.println("visits by user: " + visitsByUser.size());
         System.out.println("visits by location: " + visitsByLocation.size());
 
-        List<VisitInfo> maxVisitsByUser = getMaxVisistsByUser();
+        List<VisitInfo> maxVisitsByUser = getMaxVisitsByUser();
         System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
         List<VisitInfo> maxVisitsByLocation = getMaxVisitsByLocation();
         System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
@@ -462,7 +461,7 @@ public class App extends WebApplication {
         return visitsByLocation.values().stream().max(Comparator.comparingInt(List::size)).get();
     }
 
-    public List<VisitInfo> getMaxVisistsByUser() {
+    public List<VisitInfo> getMaxVisitsByUser() {
         return visitsByUser.values().stream().max(Comparator.comparingInt(List::size)).get();
     }
 
@@ -471,8 +470,10 @@ public class App extends WebApplication {
     }
 
     public void addCloseIfNotKeepAlive(com.wizzardo.http.request.Request request, Response response) {
-        if (!request.connection().isKeepAlive())
-            response.appendHeader(Header.KV_CONNECTION_CLOSE);
+//        if (!request.connection().isKeepAlive())
+//            response.appendHeader(Header.KV_CONNECTION_CLOSE);
+        request.connection().setKeepAlive(true);
+        response.appendHeader(Header.KV_CONNECTION_KEEP_ALIVE);
     }
 
     public void removeFromVisitMaps(Visit visit) {
@@ -526,7 +527,11 @@ public class App extends WebApplication {
         System.out.println("App started in " + startupTime + " seconds");
 
         time = System.currentTimeMillis();
-        warmUp(app, 20 - startupTime);
+        if (app.dataLength / 1024 / 1024 < 10)
+            warmUp(app, 25 - startupTime, 2000);
+        else
+            warmUp(app, 170 - startupTime, 3000);
+
         System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
     }
 
@@ -534,14 +539,20 @@ public class App extends WebApplication {
         return bytes / 1024 / 1024 + " mb";
     }
 
-    private static void warmUp(App app, float seconds) {
-        int user = app.getMaxVisistsByUser().get(0).user.id;
+    private static void warmUp(App app, float seconds, long pause) {
+        int user = app.getMaxVisitsByUser().get(0).user.id;
+        int location = app.getMaxVisitsByLocation().get(0).location.id;
         long time = System.currentTimeMillis();
         while ((System.currentTimeMillis() - time) / 1000 < seconds) {
-            String exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/users/" + user + "/visits"), "");
-            System.out.println(TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
+            String exec;
+            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/users/" + user + "/visits"), "");
+            System.out.println("visits by user: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
+            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/locations/" + location + "/avg"), "");
+            System.out.println("locations avg: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
+            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/users/" + user), "");
+            System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
 //            System.out.println(exec);
-            Unchecked.ignore(() -> Thread.sleep(2000));
+            Unchecked.ignore(() -> Thread.sleep(pause));
         }
     }
 
@@ -574,14 +585,13 @@ public class App extends WebApplication {
                     users.users.addAll(JsonTools.parse(json, Users.class).users);
                 else if (name.startsWith("visits"))
                     visits.visits.addAll(JsonTools.parse(json, Visits.class).visits);
-                else
-                    throw new IllegalArgumentException("Unknown file: " + name);
 //                System.out.println(stopwatch);
             }
             IOTools.close(zip);
         });
         System.out.println("total jsons size: " + sizeCounter.get() / 1024 / 1024 + " MB");
 
+        this.dataLength = sizeCounter.get();
         this.users = initMap(users.users);
         this.locations = initMap(locations.locations);
         this.visits = initMap(visits.visits);
@@ -623,8 +633,8 @@ public class App extends WebApplication {
         return new Response()
                 .setBody(serializeJson(ob))
 //                .appendHeader("Server: wizzardo-http/0.1\r\n".getBytes())
-                .appendHeader(Header.KV_CONNECTION_CLOSE)
-//                    .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
+//                .appendHeader(Header.KV_CONNECTION_CLOSE)
+                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                 .buildStaticResponse();
     }
