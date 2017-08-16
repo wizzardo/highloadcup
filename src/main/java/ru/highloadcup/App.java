@@ -1,5 +1,6 @@
 package ru.highloadcup;
 
+import com.wizzardo.http.FileTreeHandler;
 import com.wizzardo.http.RestHandler;
 import com.wizzardo.http.framework.WebApplication;
 import com.wizzardo.http.request.Header;
@@ -12,12 +13,12 @@ import com.wizzardo.tools.json.JsonItem;
 import com.wizzardo.tools.json.JsonObject;
 import com.wizzardo.tools.json.JsonTools;
 import com.wizzardo.tools.misc.Stopwatch;
+import com.wizzardo.tools.misc.TextTools;
 import com.wizzardo.tools.misc.Unchecked;
 import ru.highloadcup.domain.*;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -25,6 +26,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -56,18 +59,25 @@ public class App extends WebApplication {
         System.out.println("visits by user: " + visitsByUser.size());
         System.out.println("visits by location: " + visitsByLocation.size());
 
+        List<VisitInfo> maxVisitsByUser = getMaxVisistsByUser();
+        System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
+        List<VisitInfo> maxVisitsByLocation = getMaxVisitsByLocation();
+        System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
+
         onSetup(a -> {
-//            ReadableByteBuffer static_400 = new Response().status(Status._400).appendHeader(Header.KV_CONNECTION_CLOSE).buildStaticResponse();
-            Mapper<Response, Response> response_400 = (response) -> response.status(Status._400).appendHeader(Header.KV_CONNECTION_CLOSE);
+//            ReadableByteBuffer static_400 = new Response().status(Status._400).buildStaticResponse();
+            Mapper<Response, Response> response_400 = (response) -> response.status(Status._400);
 
             a.getUrlMapping()
                     .append("/users/$id/visits", new RestHandler().get((request, response) -> {
                         unmarkPosts();
+                        addCloseIfNotKeepAlive(request, response);
+
                         int id = request.params().getInt("id", -1);
                         List<VisitInfo> visitList = visitsByUser.get(id);
                         if (visitList == null)
                             return response.status(Status._404)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    ;
 
                         Stream<VisitInfo> stream = visitList.stream();
                         try {
@@ -102,20 +112,22 @@ public class App extends WebApplication {
 
 //                        if (results.isEmpty())
 //                            return response.status(Status._404)
-//                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+//                                    ;
 
                         return response
-                                .setBody(JsonTools.serialize(new VisitViews(results)))
+                                .setBody(serializeJson(new VisitViews(results)))
                                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                .appendHeader(Header.KV_CONNECTION_CLOSE);
+//
+                                ;
                     }))
                     .append("/locations/$id/avg", new RestHandler().get((request, response) -> {
                         unmarkPosts();
+                        addCloseIfNotKeepAlive(request, response);
                         int id = request.params().getInt("id", -1);
                         List<VisitInfo> visitList = visitsByLocation.get(id);
                         if (visitList == null)
                             return response.status(Status._404)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    ;
 
                         Stream<VisitInfo> stream = visitList.stream();
                         try {
@@ -159,46 +171,47 @@ public class App extends WebApplication {
                                 .average();
 
                         return response
-                                .setBody(JsonTools.serialize(new Average(Math.round(average.orElse(0) * 100000) / 100000d)))
+                                .setBody(serializeJson(new Average(Math.round(average.orElse(0) * 100000) / 100000d)))
                                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                ;
                     }))
                     .append("/users/$id", new RestHandler()
                             .get((request, response) -> {
                                 unmarkPosts();
+                                addCloseIfNotKeepAlive(request, response);
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
                                     return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            ;
                                 }
 
                                 User user = users.get(id);
                                 if (user == null)
                                     return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            ;
                                 else
                                     return response
-                                            .setBody(JsonTools.serialize(user))
-                                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            .setBody(serializeJson(user))
+                                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                             })
                             .post((request, response) -> {
                                 markPosts();
+                                addCloseIfNotKeepAlive(request, response);
 
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
                                     return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            ;
                                 }
 
                                 User user = users.get(id);
                                 if (user == null)
                                     return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            ;
 
                                 try {
                                     JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
@@ -230,44 +243,45 @@ public class App extends WebApplication {
                                 return response
                                         .setBody("{}")
                                         .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                        .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                        ;
                             })
                     )
                     .append("/locations/$id", new RestHandler()
                             .get((request, response) -> {
                                 unmarkPosts();
+                                addCloseIfNotKeepAlive(request, response);
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
                                     return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            ;
                                 }
 
                                 Location location = locations.get(id);
                                 if (location == null)
                                     return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            ;
                                 else
                                     return response
-                                            .setBody(JsonTools.serialize(location))
-                                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            .setBody(serializeJson(location))
+                                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                             })
                             .post((request, response) -> {
                                 markPosts();
+                                addCloseIfNotKeepAlive(request, response);
                                 int id;
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
                                     return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            ;
                                 }
 
                                 Location location = locations.get(id);
                                 if (location == null)
                                     return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                            ;
 
                                 try {
                                     JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
@@ -296,78 +310,82 @@ public class App extends WebApplication {
                                 return response
                                         .setBody("{}")
                                         .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                        .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                        ;
                             })
                     )
                     .append("/visits/$id", new RestHandler()
-                            .get((request, response) -> {
-                                unmarkPosts();
-                                int id;
-                                try {
-                                    id = Integer.parseInt(request.param("id"));
-                                } catch (Exception e) {
-                                    return response_400.map(response);
-                                }
-                                Visit visit = visits.get(id);
-                                if (visit == null)
-                                    return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
-                                else
-                                    return response
-                                            .setBody(JsonTools.serialize(visit))
-                                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
-                            })
-                            .post((request, response) -> {
-                                markPosts();
-                                int id;
-                                try {
-                                    id = Integer.parseInt(request.param("id"));
-                                } catch (Exception e) {
-                                    return response_400.map(response);
-                                }
-
-                                Visit visit = visits.get(id);
-                                if (visit == null)
-                                    return response.status(Status._404)
-                                            .appendHeader(Header.KV_CONNECTION_CLOSE);
-
-                                try {
-                                    JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-                                    for (JsonItem item : update.values()) {
-                                        if (item.isNull())
+                                    .get((request, response) -> {
+                                        unmarkPosts();
+                                        addCloseIfNotKeepAlive(request, response);
+                                        int id;
+                                        try {
+                                            id = Integer.parseInt(request.param("id"));
+                                        } catch (Exception e) {
                                             return response_400.map(response);
-                                    }
+                                        }
+                                        Visit visit = visits.get(id);
+                                        if (visit == null)
+                                            return response.status(Status._404)
+                                                    ;
+                                        else
+                                            return response
+                                                    .setBody(serializeJson(visit))
+                                                    .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+//
+                                                    ;
+                                    })
+                                    .post((request, response) -> {
+                                        markPosts();
+                                        addCloseIfNotKeepAlive(request, response);
+                                        int id;
+                                        try {
+                                            id = Integer.parseInt(request.param("id"));
+                                        } catch (Exception e) {
+                                            return response_400.map(response);
+                                        }
 
-                                    JsonItem item;
-                                    if ((item = update.get("user")) != null) {
-                                        removeFromVisitMaps(visit);
-                                        visit.user = item.asInteger();
-                                        addToVisitMaps(visit);
-                                    }
-                                    if ((item = update.get("location")) != null) {
-                                        removeFromVisitMaps(visit);
-                                        visit.location = item.asInteger();
-                                        addToVisitMaps(visit);
-                                    }
-                                    if ((item = update.get("mark")) != null) {
-                                        visit.mark = item.asInteger();
-                                    }
-                                    if ((item = update.get("visited_at")) != null) {
-                                        visit.visited_at = item.asLong();
-                                    }
-                                } catch (Exception e) {
-                                    return response_400.map(response);
-                                }
+                                        Visit visit = visits.get(id);
+                                        if (visit == null)
+                                            return response.status(Status._404)
+                                                    ;
 
-                                return response
-                                        .setBody("{}")
-                                        .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                        .appendHeader(Header.KV_CONNECTION_CLOSE);
-                            })
+                                        try {
+                                            JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
+                                            for (JsonItem item : update.values()) {
+                                                if (item.isNull())
+                                                    return response_400.map(response);
+                                            }
+
+                                            JsonItem item;
+                                            if ((item = update.get("user")) != null) {
+                                                removeFromVisitMaps(visit);
+                                                visit.user = item.asInteger();
+                                                addToVisitMaps(visit);
+                                            }
+                                            if ((item = update.get("location")) != null) {
+                                                removeFromVisitMaps(visit);
+                                                visit.location = item.asInteger();
+                                                addToVisitMaps(visit);
+                                            }
+                                            if ((item = update.get("mark")) != null) {
+                                                visit.mark = item.asInteger();
+                                            }
+                                            if ((item = update.get("visited_at")) != null) {
+                                                visit.visited_at = item.asLong();
+                                            }
+                                        } catch (Exception e) {
+                                            return response_400.map(response);
+                                        }
+
+                                        return response
+                                                .setBody("{}")
+                                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+                                                ;
+                                    })
                     )
                     .append("/users/new", new RestHandler().post((request, response) -> {
                         markPosts();
+                        addCloseIfNotKeepAlive(request, response);
                         try {
                             UserUpdate update = JsonTools.parse(request.getBody().bytes(), UserUpdate.class);
                             if (update.id == null || update.birth_date == null || update.first_name == null
@@ -391,13 +409,14 @@ public class App extends WebApplication {
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    ;
                         } catch (Exception e) {
                             return response_400.map(response);
                         }
                     }))
                     .append("/locations/new", new RestHandler().post((request, response) -> {
                         markPosts();
+                        addCloseIfNotKeepAlive(request, response);
                         try {
                             LocationUpdate update = JsonTools.parse(request.getBody().bytes(), LocationUpdate.class);
                             if (update.id == null || update.city == null || update.country == null
@@ -419,13 +438,14 @@ public class App extends WebApplication {
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    ;
                         } catch (Exception e) {
                             return response_400.map(response);
                         }
                     }))
                     .append("/visits/new", new RestHandler().post((request, response) -> {
                         markPosts();
+                        addCloseIfNotKeepAlive(request, response);
                         try {
                             Visit update = JsonTools.parse(request.getBody().bytes(), Visit.class);
                             Visit visit = visits.get(update.id);
@@ -437,13 +457,30 @@ public class App extends WebApplication {
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                    .appendHeader(Header.KV_CONNECTION_CLOSE);
+                                    ;
                         } catch (Exception e) {
                             return response_400.map(response);
                         }
                     }))
             ;
         });
+    }
+
+    public List<VisitInfo> getMaxVisitsByLocation() {
+        return visitsByLocation.values().stream().max(Comparator.comparingInt(List::size)).get();
+    }
+
+    public List<VisitInfo> getMaxVisistsByUser() {
+        return visitsByUser.values().stream().max(Comparator.comparingInt(List::size)).get();
+    }
+
+    public byte[] serializeJson(Object data) {
+        return JsonTools.serializeToBytes(data);
+    }
+
+    public void addCloseIfNotKeepAlive(com.wizzardo.http.request.Request request, Response response) {
+        if (!request.connection().isKeepAlive())
+            response.appendHeader(Header.KV_CONNECTION_CLOSE);
     }
 
     public void removeFromVisitMaps(Visit visit) {
@@ -493,44 +530,27 @@ public class App extends WebApplication {
         long time = System.currentTimeMillis();
         App app = new App(args);
         app.start();
-        System.out.println("App started in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
+        float startupTime = (System.currentTimeMillis() - time) / 1000f;
+        System.out.println("App started in " + startupTime + " seconds");
 
-        Runtime runtime = Runtime.getRuntime();
-        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
-        System.out.println("run GC");
-        System.gc();
-        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
-        for (int i = 0; i < 10; i++) {
-            warmUp(app);
-            Unchecked.ignore(() -> Thread.sleep(1000));
-        }
-
-        System.gc();
-        System.out.println("total mem: " + formatBytes(runtime.totalMemory()) + "; max mem: " + formatBytes(runtime.maxMemory()) + "; free mem: " + formatBytes(runtime.freeMemory()) + "; used mem: " + formatBytes((runtime.totalMemory() - runtime.freeMemory())));
+        time = System.currentTimeMillis();
+        warmUp(app, 20 - startupTime);
+        System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
     }
 
     public static String formatBytes(long bytes) {
         return bytes / 1024 / 1024 + " mb";
     }
 
-    private static void warmUp(App app) {
-        long time = System.nanoTime();
-        int counter = 0;
-        for (Map.Entry<Integer, User> entry : app.users.entrySet()) {
-            counter++;
-            Unchecked.ignore(() -> new Request("http://localhost:8080/users/" + entry.getValue().id).get());
+    private static void warmUp(App app, float seconds) {
+        int user = app.getMaxVisistsByUser().get(0).user.id;
+        long time = System.currentTimeMillis();
+        while ((System.currentTimeMillis() - time) / 1000 < seconds) {
+            String exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/users/" + user + "/visits"), "");
+            System.out.println(TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
+//            System.out.println(exec);
+            Unchecked.ignore(() -> Thread.sleep(2000));
         }
-        for (Map.Entry<Integer, Location> entry : app.locations.entrySet()) {
-            counter++;
-            Unchecked.ignore(() -> new Request("http://localhost:8080/locations/" + entry.getValue().id).get());
-        }
-        for (Map.Entry<Integer, Visit> entry : app.visits.entrySet()) {
-            counter++;
-            Unchecked.ignore(() -> new Request("http://localhost:8080/visits/" + entry.getValue().id).get());
-        }
-        time = System.nanoTime() - time;
-        System.out.println("warmUp finished in " + (time / 1000 / 1000 / 1000f) + " s");
-        System.out.println("average response time is " + (time / counter) / 1000f + " us");
     }
 
     private void initData() {
@@ -540,6 +560,7 @@ public class App extends WebApplication {
         Locations locations = new Locations();
         Users users = new Users();
         Visits visits = new Visits();
+        AtomicLong sizeCounter = new AtomicLong();
         Unchecked.run(() -> {
             ZipInputStream zip = new ZipInputStream(new FileInputStream(zipFile));
             ZipEntry nextEntry;
@@ -548,6 +569,7 @@ public class App extends WebApplication {
             while ((nextEntry = zip.getNextEntry()) != null) {
                 String name = nextEntry.getName();
 //                Stopwatch stopwatch = new Stopwatch("reading data from " + name, true);
+                sizeCounter.addAndGet(nextEntry.getSize());
                 IOTools.copy(zip, out, buffer);
                 String json = out.toString();
                 out.reset();
@@ -566,6 +588,7 @@ public class App extends WebApplication {
             }
             IOTools.close(zip);
         });
+        System.out.println("total jsons size: " + sizeCounter.get() / 1024 / 1024 + " MB");
 
         this.users = initMap(users.users);
         this.locations = initMap(locations.locations);
@@ -605,5 +628,37 @@ public class App extends WebApplication {
         }
 //        System.out.println(stopwatch);
         return map;
+    }
+
+    public static String exec(String cmd) {
+        try {
+            Process process;
+            process = Runtime.getRuntime().exec(cmd);
+            int result = process.waitFor();
+//            if (result != 0)
+//                throw new IllegalArgumentException("Process ended with code: " + result);
+
+            byte[] bytes = new byte[1024];
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            InputStream in = process.getInputStream();
+            InputStream err = process.getErrorStream();
+            int read;
+            while ((read = in.read(bytes)) != -1) {
+                out.write(bytes, 0, read);
+            }
+            in.close();
+            out.write("\n".getBytes());
+            while ((read = err.read(bytes)) != -1) {
+                out.write(bytes, 0, read);
+            }
+            err.close();
+            out.close();
+            return new String(out.toByteArray(), StandardCharsets.UTF_8).trim();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return null;
     }
 }
