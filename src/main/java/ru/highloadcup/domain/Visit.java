@@ -1,6 +1,7 @@
 package ru.highloadcup.domain;
 
 import com.wizzardo.epoll.readable.ReadableByteBuffer;
+import ru.highloadcup.VisitInfo;
 
 /**
  * Created by Mikhail Bobrutskov on 11.08.17.
@@ -13,6 +14,7 @@ public class Visit implements WithId {
     public int mark;
 
     public transient ReadableByteBuffer staticResponse;
+    public transient VisitInfo visitInfo;
 
     @Override
     public int id() {

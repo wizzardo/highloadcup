@@ -11,6 +11,7 @@ import com.wizzardo.tools.io.IOTools;
 import com.wizzardo.tools.json.JsonItem;
 import com.wizzardo.tools.json.JsonObject;
 import com.wizzardo.tools.json.JsonTools;
+import com.wizzardo.tools.misc.ExceptionDrivenStringBuilder;
 import com.wizzardo.tools.misc.Stopwatch;
 import com.wizzardo.tools.misc.TextTools;
 import com.wizzardo.tools.misc.Unchecked;
@@ -67,6 +68,7 @@ public class App extends WebApplication {
         onSetup(a -> {
 //            ReadableByteBuffer static_400 = new Response().status(Status._400).buildStaticResponse();
             Mapper<Response, Response> response_400 = (response) -> response.status(Status._400);
+            //todo make static 400, 404
 
             a.getUrlMapping()
                     .append("/users/$id/visits", new RestHandler().get((request, response) -> {
@@ -76,8 +78,7 @@ public class App extends WebApplication {
                         int id = request.params().getInt("id", -1);
                         List<VisitInfo> visitList = visitsByUser.get(id);
                         if (visitList == null)
-                            return response.status(Status._404)
-                                    ;
+                            return response.status(Status._404);
 
                         Stream<VisitInfo> stream = visitList.stream();
                         try {
@@ -106,19 +107,43 @@ public class App extends WebApplication {
                             return response_400.map(response);
                         }
 
-                        List<VisitView> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at))
-                                .map(visitInfo -> new VisitView(visitInfo.visit.mark, visitInfo.visit.visited_at, visitInfo.location.place))
+                        List<VisitInfo> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at))
+//                                .map(visitInfo -> new VisitView(visitInfo.visit.mark, visitInfo.visit.visited_at, visitInfo.location.place))
                                 .collect(Collectors.toList());
 
-//                        if (results.isEmpty())
-//                            return response.status(Status._404)
-//                                    ;
+                        byte[] result;
+                        if (results.isEmpty()) {
+                            result = new byte[]{'{', '"', 'v', 'i', 's', 'i', 't', 's', '"', ':', '[', ']', '}'};
+                        } else {
+                            int size = 1 + 2 + 2 + 1 + 6; // {"visits":[ + ] - last ',' }
+                            for (VisitInfo vi : results) {
+                                size += vi.getJson().length + 1;
+                            }
+                            result = new byte[size];
+                            result[0] = '{';
+                            result[1] = '"';
+                            result[2] = 'v';
+                            result[3] = 'i';
+                            result[4] = 's';
+                            result[5] = 'i';
+                            result[6] = 't';
+                            result[7] = 's';
+                            result[8] = '"';
+                            result[9] = ':';
+                            result[10] = '[';
+                            int offset = 11;
+                            for (VisitInfo vi : results) {
+                                System.arraycopy(vi.json, 0, result, offset, vi.json.length);
+                                offset += vi.json.length; // ignore checks
+                                result[offset++] = ',';
+                            }
+                            result[offset - 1] = ']';
+                            result[offset] = '}';
+                        }
 
                         return response
-                                .setBody(serializeJson(new VisitViews(results)))
-                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-//
-                                ;
+                                .setBody(result)
+                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                     }))
                     .append("/locations/$id/avg", new RestHandler().get((request, response) -> {
                         unmarkPosts();
@@ -170,10 +195,12 @@ public class App extends WebApplication {
                                 .mapToDouble(visitInfo -> visitInfo.visit.mark)
                                 .average();
 
+                        double result = Math.round(average.orElse(0) * 100000) / 100000d;
+
+                        String s = new ExceptionDrivenStringBuilder().append("{\"avg\":").append(result).append("}").toString();
                         return response
-                                .setBody(serializeJson(new Average(Math.round(average.orElse(0) * 100000) / 100000d)))
-                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                ;
+                                .setBody(s)
+                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                     }))
                     .append("/users/$id", new RestHandler()
                             .get((request, response) -> {
@@ -248,8 +275,7 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._404)
-                                            ;
+                                    return response.status(Status._404);
                                 }
 
                                 Location location = locations.get(id);
@@ -265,14 +291,12 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._404)
-                                            ;
+                                    return response.status(Status._404);
                                 }
 
                                 Location location = locations.get(id);
                                 if (location == null)
-                                    return response.status(Status._404)
-                                            ;
+                                    return response.status(Status._404);
 
                                 try {
                                     JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
@@ -533,6 +557,7 @@ public class App extends WebApplication {
             warmUp(app, 170 - startupTime, 3000);
 
         System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
+        System.gc();
     }
 
     public static String formatBytes(long bytes) {

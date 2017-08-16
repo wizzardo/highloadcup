@@ -2,7 +2,7 @@ server {
     host = '0.0.0.0'
     port = 8080
     ioWorkersCount = 4
-    ttl = 60 * 1000
+    ttl = 5 * 1000
     context = '/'
 }
 environments {
