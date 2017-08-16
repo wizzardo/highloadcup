@@ -1,5 +1,6 @@
 package ru.highloadcup;
 
+import com.wizzardo.epoll.readable.ReadableByteBuffer;
 import com.wizzardo.http.FileTreeHandler;
 import com.wizzardo.http.RestHandler;
 import com.wizzardo.http.framework.WebApplication;
@@ -183,18 +184,14 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._404)
-                                            ;
+                                    return response.status(Status._404);
                                 }
 
                                 User user = users.get(id);
                                 if (user == null)
-                                    return response.status(Status._404)
-                                            ;
-                                else
-                                    return response
-                                            .setBody(serializeJson(user))
-                                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
+                                    return response.status(Status._404);
+
+                                return response.setStaticResponse(user.staticResponse.copy());
                             })
                             .post((request, response) -> {
                                 markPosts();
@@ -204,14 +201,12 @@ public class App extends WebApplication {
                                 try {
                                     id = Integer.parseInt(request.param("id"));
                                 } catch (Exception e) {
-                                    return response.status(Status._404)
-                                            ;
+                                    return response.status(Status._404);
                                 }
 
                                 User user = users.get(id);
                                 if (user == null)
-                                    return response.status(Status._404)
-                                            ;
+                                    return response.status(Status._404);
 
                                 try {
                                     JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
@@ -240,10 +235,10 @@ public class App extends WebApplication {
                                     return response_400.map(response);
                                 }
 
+                                user.staticResponse = prepareStaticJsonResponse(user);
                                 return response
                                         .setBody("{}")
-                                        .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                        ;
+                                        .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                             })
                     )
                     .append("/locations/$id", new RestHandler()
@@ -260,12 +255,9 @@ public class App extends WebApplication {
 
                                 Location location = locations.get(id);
                                 if (location == null)
-                                    return response.status(Status._404)
-                                            ;
-                                else
-                                    return response
-                                            .setBody(serializeJson(location))
-                                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
+                                    return response.status(Status._404);
+
+                                return response.setStaticResponse(location.staticResponse.copy());
                             })
                             .post((request, response) -> {
                                 markPosts();
@@ -307,6 +299,7 @@ public class App extends WebApplication {
                                     return response_400.map(response);
                                 }
 
+                                location.staticResponse = prepareStaticJsonResponse(location);
                                 return response
                                         .setBody("{}")
                                         .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -314,74 +307,70 @@ public class App extends WebApplication {
                             })
                     )
                     .append("/visits/$id", new RestHandler()
-                                    .get((request, response) -> {
-                                        unmarkPosts();
-                                        addCloseIfNotKeepAlive(request, response);
-                                        int id;
-                                        try {
-                                            id = Integer.parseInt(request.param("id"));
-                                        } catch (Exception e) {
+                            .get((request, response) -> {
+                                unmarkPosts();
+                                addCloseIfNotKeepAlive(request, response);
+                                int id;
+                                try {
+                                    id = Integer.parseInt(request.param("id"));
+                                } catch (Exception e) {
+                                    return response_400.map(response);
+                                }
+                                Visit visit = visits.get(id);
+                                if (visit == null)
+                                    return response.status(Status._404);
+
+                                return response.setStaticResponse(visit.staticResponse.copy());
+                            })
+                            .post((request, response) -> {
+                                markPosts();
+                                addCloseIfNotKeepAlive(request, response);
+                                int id;
+                                try {
+                                    id = Integer.parseInt(request.param("id"));
+                                } catch (Exception e) {
+                                    return response_400.map(response);
+                                }
+
+                                Visit visit = visits.get(id);
+                                if (visit == null)
+                                    return response.status(Status._404)
+                                            ;
+
+                                try {
+                                    JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
+                                    for (JsonItem item : update.values()) {
+                                        if (item.isNull())
                                             return response_400.map(response);
-                                        }
-                                        Visit visit = visits.get(id);
-                                        if (visit == null)
-                                            return response.status(Status._404)
-                                                    ;
-                                        else
-                                            return response
-                                                    .setBody(serializeJson(visit))
-                                                    .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-//
-                                                    ;
-                                    })
-                                    .post((request, response) -> {
-                                        markPosts();
-                                        addCloseIfNotKeepAlive(request, response);
-                                        int id;
-                                        try {
-                                            id = Integer.parseInt(request.param("id"));
-                                        } catch (Exception e) {
-                                            return response_400.map(response);
-                                        }
+                                    }
 
-                                        Visit visit = visits.get(id);
-                                        if (visit == null)
-                                            return response.status(Status._404)
-                                                    ;
+                                    JsonItem item;
+                                    if ((item = update.get("user")) != null) {
+                                        removeFromVisitMaps(visit);
+                                        visit.user = item.asInteger();
+                                        addToVisitMaps(visit);
+                                    }
+                                    if ((item = update.get("location")) != null) {
+                                        removeFromVisitMaps(visit);
+                                        visit.location = item.asInteger();
+                                        addToVisitMaps(visit);
+                                    }
+                                    if ((item = update.get("mark")) != null) {
+                                        visit.mark = item.asInteger();
+                                    }
+                                    if ((item = update.get("visited_at")) != null) {
+                                        visit.visited_at = item.asLong();
+                                    }
+                                } catch (Exception e) {
+                                    return response_400.map(response);
+                                }
 
-                                        try {
-                                            JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-                                            for (JsonItem item : update.values()) {
-                                                if (item.isNull())
-                                                    return response_400.map(response);
-                                            }
-
-                                            JsonItem item;
-                                            if ((item = update.get("user")) != null) {
-                                                removeFromVisitMaps(visit);
-                                                visit.user = item.asInteger();
-                                                addToVisitMaps(visit);
-                                            }
-                                            if ((item = update.get("location")) != null) {
-                                                removeFromVisitMaps(visit);
-                                                visit.location = item.asInteger();
-                                                addToVisitMaps(visit);
-                                            }
-                                            if ((item = update.get("mark")) != null) {
-                                                visit.mark = item.asInteger();
-                                            }
-                                            if ((item = update.get("visited_at")) != null) {
-                                                visit.visited_at = item.asLong();
-                                            }
-                                        } catch (Exception e) {
-                                            return response_400.map(response);
-                                        }
-
-                                        return response
-                                                .setBody("{}")
-                                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                                ;
-                                    })
+                                visit.staticResponse = prepareStaticJsonResponse(visit);
+                                return response
+                                        .setBody("{}")
+                                        .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+                                        ;
+                            })
                     )
                     .append("/users/new", new RestHandler().post((request, response) -> {
                         markPosts();
@@ -406,6 +395,7 @@ public class App extends WebApplication {
 
                             users.put(update.id, user);
                             visitsByUser.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
+                            user.staticResponse = prepareStaticJsonResponse(user);
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -435,6 +425,7 @@ public class App extends WebApplication {
                             location.place = update.place;
                             locations.put(update.id, location);
                             visitsByLocation.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
+                            location.staticResponse = prepareStaticJsonResponse(location);
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -454,6 +445,7 @@ public class App extends WebApplication {
 
                             visits.put(update.id, update);
                             addToVisitMaps(update);
+                            update.staticResponse = prepareStaticJsonResponse(update);
                             return response
                                     .setBody("{}")
                                     .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
@@ -608,12 +600,33 @@ public class App extends WebApplication {
         }
 //        System.out.println(stopwatch);
 
+        for (User user : users.users) {
+            user.staticResponse = prepareStaticJsonResponse(user);
+        }
+        for (Location location : locations.locations) {
+            location.staticResponse = prepareStaticJsonResponse(location);
+        }
+
+        for (Visit visit : visits.visits) {
+            visit.staticResponse = prepareStaticJsonResponse(visit);
+        }
+
         long[] years = new long[256];
         for (int i = 0; i < years.length; i++) {
             years[i] = getSecondsOfAge(i);
 //            System.out.println("age " + i + ": " + years[i]);
         }
         this.years = years;
+    }
+
+    private ReadableByteBuffer prepareStaticJsonResponse(Object ob) {
+        return new Response()
+                .setBody(serializeJson(ob))
+//                .appendHeader("Server: wizzardo-http/0.1\r\n".getBytes())
+                .appendHeader(Header.KV_CONNECTION_CLOSE)
+//                    .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
+                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+                .buildStaticResponse();
     }
 
     private long getSecondsOfAge(int i) {
