@@ -1,5 +1,6 @@
 package ru.highloadcup;
 
+import com.wizzardo.epoll.readable.ReadableByteArray;
 import com.wizzardo.epoll.readable.ReadableByteBuffer;
 import com.wizzardo.http.HttpConnection;
 import com.wizzardo.http.MultiValue;
@@ -19,6 +20,10 @@ import com.wizzardo.tools.misc.ExceptionDrivenStringBuilder;
 import com.wizzardo.tools.misc.Stopwatch;
 import com.wizzardo.tools.misc.TextTools;
 import com.wizzardo.tools.misc.Unchecked;
+import com.wizzardo.tools.misc.pool.Holder;
+import com.wizzardo.tools.misc.pool.Pool;
+import com.wizzardo.tools.misc.pool.PoolBuilder;
+import com.wizzardo.tools.misc.pool.SimpleHolder;
 import ru.highloadcup.domain.*;
 
 import java.io.*;
@@ -30,6 +35,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -42,6 +48,7 @@ import java.util.zip.ZipInputStream;
  */
 public class App extends WebApplication {
     protected static final byte[] HEADER_SERVER_NAME = "Server: wizzardo-http/0.1\r\n".getBytes();
+    protected static final byte[] RESPONSE_EMPTY_VISITS = {'{', '"', 'v', 'i', 's', 'i', 't', 's', '"', ':', '[', ']', '}'};
     Map<Integer, User> users;
     Map<Integer, Location> locations;
     Map<Integer, Visit> visits;
@@ -50,7 +57,16 @@ public class App extends WebApplication {
     Map<Integer, List<VisitInfo>> visitsByLocation;
     long[] years;
 
+    AtomicInteger counter = new AtomicInteger();
     long dataLength;
+    Pool<byte[]> byteArrayPool = new PoolBuilder<byte[]>()
+            .queue(PoolBuilder.createThreadLocalQueueSupplier())
+            .supplier(() -> {
+                System.out.println("create new byte array: " + counter.incrementAndGet());
+                return new byte[10240];
+            })
+            .holder(SimpleHolder::new)
+            .build();
 
     @Override
     protected void handle(HttpConnection connection) throws Exception {
@@ -90,11 +106,6 @@ public class App extends WebApplication {
 //            ReadableByteBuffer static_400 = new Response().status(Status._400).buildStaticResponse();
             Mapper<Response, Response> response_400 = (response) -> response.status(Status._400);
             //todo make static 400, 404, 200 for POST
-            //todo don't read headers on GET -> ignore all headers except Content-Length
-            //todo check if i can put data into arrays instead of maps
-            //todo GC tweaks? -> pool of arrays for responses
-            //todo remove framework filters
-            //todo check custom mapping performance
 
             a.getUrlMapping()
                     .append("/users/$id/visits", new RestHandler().get((request, response) -> {
@@ -118,13 +129,16 @@ public class App extends WebApplication {
 
                         byte[] result;
                         if (results.isEmpty()) {
-                            result = new byte[]{'{', '"', 'v', 'i', 's', 'i', 't', 's', '"', ':', '[', ']', '}'};
+                            result = RESPONSE_EMPTY_VISITS;
+                            response.setBody(result);
                         } else {
-                            int size = 1 + 2 + 2 + 1 + 6; // {"visits":[ + ] - last ',' }
-                            for (VisitInfo vi : results) {
-                                size += vi.getJson().length + 1;
-                            }
-                            result = new byte[size];
+                            Holder<byte[]> holder = byteArrayPool.holder();
+                            result = holder.get();
+//                            int size = 1 + 2 + 2 + 1 + 6; // {"visits":[ + ] - last ',' }
+//                            for (VisitInfo vi : results) {
+//                                size += vi.getJson().length + 1;
+//                            }
+//                            result = new byte[size];
                             result[0] = '{';
                             result[1] = '"';
                             result[2] = 'v';
@@ -138,25 +152,30 @@ public class App extends WebApplication {
                             result[10] = '[';
                             int offset = 11;
                             for (VisitInfo vi : results) {
-                                System.arraycopy(vi.json, 0, result, offset, vi.json.length);
-                                offset += vi.json.length; // ignore checks
+                                byte[] json = vi.getJson();
+                                System.arraycopy(json, 0, result, offset, json.length);
+                                offset += json.length;
                                 result[offset++] = ',';
                             }
                             result[offset - 1] = ']';
                             result[offset] = '}';
+
+                            response.setBody(new ReadableByteArray(result, 0, offset + 1) {
+                                @Override
+                                public void close() {
+                                    holder.close();
+                                }
+                            });
                         }
 
-                        return response
-                                .setBody(result)
-                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
+                        return response.appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                     }))
                     .append("/locations/$id/avg", new RestHandler().get((request, response) -> {
 //                        addCloseIfNotKeepAlive(request, response);
                         int id = request.params().getInt("id", -1);
                         List<VisitInfo> visitList = visitsByLocation.get(id);
                         if (visitList == null)
-                            return response.status(Status._404)
-                                    ;
+                            return response.status(Status._404);
 
                         Stream<VisitInfo> stream = visitList.stream();
                         try {
