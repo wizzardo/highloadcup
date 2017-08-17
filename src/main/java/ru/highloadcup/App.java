@@ -25,6 +25,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
@@ -61,14 +62,26 @@ public class App extends WebApplication {
         System.out.println("visits by location: " + visitsByLocation.size());
 
         List<VisitInfo> maxVisitsByUser = getMaxVisitsByUser();
-        System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
+        if (!maxVisitsByUser.isEmpty())
+            System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
+
         List<VisitInfo> maxVisitsByLocation = getMaxVisitsByLocation();
-        System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
+        if (!maxVisitsByLocation.isEmpty())
+            System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
 
         onSetup(a -> {
 //            ReadableByteBuffer static_400 = new Response().status(Status._400).buildStaticResponse();
             Mapper<Response, Response> response_400 = (response) -> response.status(Status._400);
-            //todo make static 400, 404
+            //todo make static 400, 404, 200 for POST
+            //todo don't read headers on GET -> ignore all headers except Content-Length
+            //todo don't remove data from maps, update it
+            //todo check if i can put data into arrays instead of maps
+            //todo GC tweaks? -> pool of arrays for responses
+            //todo remove framework filters
+            //todo check custom mapping performance
+
+            //todo POST - 12k * 0.3ms = 3600ms -> 0.15 ~ 2000ms
+            //todo smart warmup, randomize ids
 
             a.getUrlMapping()
                     .append("/users/$id/visits", new RestHandler().get((request, response) -> {
@@ -82,6 +95,7 @@ public class App extends WebApplication {
 
                         Stream<VisitInfo> stream = visitList.stream();
                         try {
+                            // todo count params, don't check everything, make swicth/case
                             String s;
                             s = request.param("fromDate");
                             if (s != null) {
@@ -95,7 +109,7 @@ public class App extends WebApplication {
                             }
                             s = request.param("toDistance");
                             if (s != null) {
-                                long toDistance = Integer.parseInt(s);
+                                int toDistance = Integer.parseInt(s);
                                 stream = stream.filter(visitInfo -> visitInfo.location.distance < toDistance);
                             }
                             s = request.param("country");
@@ -107,7 +121,7 @@ public class App extends WebApplication {
                             return response_400.map(response);
                         }
 
-                        List<VisitInfo> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at))
+                        List<VisitInfo> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at)) //todo make collection sorted by default
 //                                .map(visitInfo -> new VisitView(visitInfo.visit.mark, visitInfo.visit.visited_at, visitInfo.location.place))
                                 .collect(Collectors.toList());
 
@@ -482,11 +496,11 @@ public class App extends WebApplication {
     }
 
     public List<VisitInfo> getMaxVisitsByLocation() {
-        return visitsByLocation.values().stream().max(Comparator.comparingInt(List::size)).get();
+        return visitsByLocation.values().stream().max(Comparator.comparingInt(List::size)).orElse(Collections.emptyList());
     }
 
     public List<VisitInfo> getMaxVisitsByUser() {
-        return visitsByUser.values().stream().max(Comparator.comparingInt(List::size)).get();
+        return visitsByUser.values().stream().max(Comparator.comparingInt(List::size)).orElse(Collections.emptyList());
     }
 
     public byte[] serializeJson(Object data) {
@@ -549,12 +563,14 @@ public class App extends WebApplication {
         app.start();
         float startupTime = (System.currentTimeMillis() - time) / 1000f;
         System.out.println("App started in " + startupTime + " seconds");
+//        System.out.println(Unchecked.ignore(() -> exec("/opt/wrk -v"), "wrk failed to start"));
 
         time = System.currentTimeMillis();
-        if (app.dataLength / 1024 / 1024 < 10)
-            warmUp(app, 25 - startupTime, 2000);
-        else
-            warmUp(app, 170 - startupTime, 3000);
+        if (!app.users.isEmpty())
+            if (app.dataLength / 1024 / 1024 < 10)
+                warmUp(app, 25 - startupTime, 2000);
+            else
+                warmUp(app, 170 - startupTime, 3000);
 
         System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
         System.gc();
@@ -565,31 +581,49 @@ public class App extends WebApplication {
     }
 
     private static void warmUp(App app, float seconds, long pause) {
-        int user = app.getMaxVisitsByUser().get(0).user.id;
-        int location = app.getMaxVisitsByLocation().get(0).location.id;
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        int u;
+        while (!app.users.containsKey(u = random.nextInt(app.users.size()))) {
+        }
+
+        int l;
+        while (!app.locations.containsKey(l = random.nextInt(app.locations.size()))) {
+        }
+//        int user = app.getMaxVisitsByUser().get(0).user.id;
+//        int location = app.getMaxVisitsByLocation().get(0).location.id;
         long time = System.currentTimeMillis();
+        int user = u;
+        int location = l;
         while ((System.currentTimeMillis() - time) / 1000 < seconds) {
             String exec;
-            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/users/" + user + "/visits"), "");
-            System.out.println("visits by user: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
-            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/locations/" + location + "/avg"), "");
-            System.out.println("locations avg: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
-            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/users/" + user), "");
-            System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
+//            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/users/" + user + "/visits"), "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 1 -d 1 http://127.0.0.1:" + app.getPort() + "/users/" + user + "/visits"), "");
+//            System.out.println("visits by user: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
+            System.out.println("visits by user: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/locations/" + location + "/avg"), "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 1 -d 1 http://127.0.0.1:" + app.getPort() + "/locations/" + location + "/avg"), "");
+//            System.out.println("locations avg: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
+            System.out.println("locations avg: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            exec = Unchecked.ignore(() -> exec("ab -c 2 -k -n 10000 http://127.0.0.1:" + app.getPort() + "/users/" + user), "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 1 -d 1 http://127.0.0.1:" + app.getPort() + "/users/" + user), "");
+//            System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
+            System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 //            System.out.println(exec);
             Unchecked.ignore(() -> Thread.sleep(pause));
         }
     }
 
     private void initData() {
-//        File dest = new File("/tmp/data_unzipped");
         File zipFile = new File("/tmp/data/data.zip");
-//        ZipTools.unzip(zipFile, dest);
+
         Locations locations = new Locations();
         Users users = new Users();
         Visits visits = new Visits();
         AtomicLong sizeCounter = new AtomicLong();
         Unchecked.run(() -> {
+            if (!zipFile.exists())
+                return;
+
             ZipInputStream zip = new ZipInputStream(new FileInputStream(zipFile));
             ZipEntry nextEntry;
             byte[] buffer = new byte[65536];
