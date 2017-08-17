@@ -1,12 +1,16 @@
 package ru.highloadcup;
 
 import com.wizzardo.epoll.readable.ReadableByteBuffer;
+import com.wizzardo.http.HttpConnection;
+import com.wizzardo.http.MultiValue;
 import com.wizzardo.http.RestHandler;
 import com.wizzardo.http.framework.WebApplication;
 import com.wizzardo.http.request.Header;
+import com.wizzardo.http.request.Request;
 import com.wizzardo.http.response.Response;
 import com.wizzardo.http.response.Status;
 import com.wizzardo.tools.interfaces.Mapper;
+import com.wizzardo.tools.io.FileTools;
 import com.wizzardo.tools.io.IOTools;
 import com.wizzardo.tools.json.JsonItem;
 import com.wizzardo.tools.json.JsonObject;
@@ -26,7 +30,6 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -38,6 +41,7 @@ import java.util.zip.ZipInputStream;
  * Created by Mikhail Bobrutskov on 11.08.17.
  */
 public class App extends WebApplication {
+    protected static final byte[] HEADER_SERVER_NAME = "Server: wizzardo-http/0.1\r\n".getBytes();
     Map<Integer, User> users;
     Map<Integer, Location> locations;
     Map<Integer, Visit> visits;
@@ -46,8 +50,21 @@ public class App extends WebApplication {
     Map<Integer, List<VisitInfo>> visitsByLocation;
     long[] years;
 
-    AtomicBoolean posts = new AtomicBoolean(false);
     long dataLength;
+
+    @Override
+    protected void handle(HttpConnection connection) throws Exception {
+        Request request = connection.getRequest();
+        Response response = connection.getResponse();
+
+        connection.setKeepAlive(true);
+
+        response.appendHeader(HEADER_SERVER_NAME);
+        response.appendHeader(serverDate.getDateAsBytes());
+        response.appendHeader(Header.KV_CONNECTION_KEEP_ALIVE);
+
+        handle(request, response);
+    }
 
     public App(String[] args) {
         super(args);
@@ -74,19 +91,14 @@ public class App extends WebApplication {
             Mapper<Response, Response> response_400 = (response) -> response.status(Status._400);
             //todo make static 400, 404, 200 for POST
             //todo don't read headers on GET -> ignore all headers except Content-Length
-            //todo don't remove data from maps, update it
             //todo check if i can put data into arrays instead of maps
             //todo GC tweaks? -> pool of arrays for responses
             //todo remove framework filters
             //todo check custom mapping performance
 
-            //todo POST - 12k * 0.3ms = 3600ms -> 0.15 ~ 2000ms
-            //todo smart warmup, randomize ids
-
             a.getUrlMapping()
                     .append("/users/$id/visits", new RestHandler().get((request, response) -> {
-                        unmarkPosts();
-                        addCloseIfNotKeepAlive(request, response);
+//                        addCloseIfNotKeepAlive(request, response);
 
                         int id = request.params().getInt("id", -1);
                         List<VisitInfo> visitList = visitsByUser.get(id);
@@ -95,28 +107,7 @@ public class App extends WebApplication {
 
                         Stream<VisitInfo> stream = visitList.stream();
                         try {
-                            // todo count params, don't check everything, make swicth/case
-                            String s;
-                            s = request.param("fromDate");
-                            if (s != null) {
-                                long fromDate = Long.parseLong(s);
-                                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at > fromDate); //todo put into tree-map
-                            }
-                            s = request.param("toDate");
-                            if (s != null) {
-                                long toDate = Long.parseLong(s);
-                                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at < toDate); //todo put into tree-map
-                            }
-                            s = request.param("toDistance");
-                            if (s != null) {
-                                int toDistance = Integer.parseInt(s);
-                                stream = stream.filter(visitInfo -> visitInfo.location.distance < toDistance);
-                            }
-                            s = request.param("country");
-                            if (s != null) {
-                                String country = s;
-                                stream = stream.filter(visitInfo -> country.equals(visitInfo.location.country));
-                            }
+                            stream = prepareUserVisitsStream(request, stream);
                         } catch (Exception e) {
                             return response_400.map(response);
                         }
@@ -160,8 +151,7 @@ public class App extends WebApplication {
                                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                     }))
                     .append("/locations/$id/avg", new RestHandler().get((request, response) -> {
-                        unmarkPosts();
-                        addCloseIfNotKeepAlive(request, response);
+//                        addCloseIfNotKeepAlive(request, response);
                         int id = request.params().getInt("id", -1);
                         List<VisitInfo> visitList = visitsByLocation.get(id);
                         if (visitList == null)
@@ -170,37 +160,7 @@ public class App extends WebApplication {
 
                         Stream<VisitInfo> stream = visitList.stream();
                         try {
-                            String s;
-                            s = request.param("fromDate");
-                            if (s != null) {
-                                long fromDate = Long.parseLong(s);
-                                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at > fromDate); //todo put into tree-map
-                            }
-                            s = request.param("toDate");
-                            if (s != null) {
-                                long toDate = Long.parseLong(s);
-                                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at < toDate); //todo put into tree-map
-                            }
-                            s = request.param("fromAge");
-                            if (s != null) {
-                                int fromAge = Integer.parseInt(s);
-                                long ageValue = getSecondsFromAge(fromAge);
-//                                long ageValue = System.currentTimeMillis() - fromAge * 1000l * 60 * 60 * 24 * 365;
-                                stream = stream.filter(visit -> visit.user.birth_date < ageValue);
-                            }
-                            s = request.param("toAge");
-                            if (s != null) {
-                                int toAge = Integer.parseInt(s);
-                                long ageValue = getSecondsFromAge(toAge);
-//                                long ageValue = System.currentTimeMillis() - toAge * 1000l * 60 * 60 * 24 * 365;
-                                stream = stream.filter(visit -> visit.user.birth_date > ageValue);
-                            }
-                            s = request.param("gender");
-                            if (s != null) {
-                                User.Gender gender = User.Gender.valueOf(s);
-                                stream = stream.filter(visit -> visit.user.gender == gender);
-                            }
-
+                            stream = prepareLocationVisitsStream(request, stream);
                         } catch (Exception e) {
                             return response_400.map(response);
                         }
@@ -217,201 +177,134 @@ public class App extends WebApplication {
                                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                     }))
                     .append("/users/$id", new RestHandler()
-                            .get((request, response) -> {
-                                unmarkPosts();
-                                addCloseIfNotKeepAlive(request, response);
-                                int id;
-                                try {
-                                    id = Integer.parseInt(request.param("id"));
-                                } catch (Exception e) {
-                                    return response.status(Status._404);
-                                }
+                                    .get((request, response) -> {
+//                                addCloseIfNotKeepAlive(request, response);
+                                        int id;
+                                        try {
+                                            id = Integer.parseInt(request.param("id"));
+                                        } catch (Exception e) {
+                                            return response.status(Status._404);
+                                        }
 
-                                User user = users.get(id);
-                                if (user == null)
-                                    return response.status(Status._404);
+                                        User user = users.get(id);
+                                        if (user == null)
+                                            return response.status(Status._404);
 
-                                return response.setStaticResponse(user.staticResponse.copy());
-                            })
-                            .post((request, response) -> {
-                                markPosts();
-                                addCloseIfNotKeepAlive(request, response);
+                                        return response.setStaticResponse(user.staticResponse.copy());
+                                    })
+                                    .post((request, response) -> {
+//                                addCloseIfNotKeepAlive(request, response);
 
-                                int id;
-                                try {
-                                    id = Integer.parseInt(request.param("id"));
-                                } catch (Exception e) {
-                                    return response.status(Status._404);
-                                }
+                                        int id;
+                                        try {
+                                            id = Integer.parseInt(request.param("id"));
+                                        } catch (Exception e) {
+                                            return response.status(Status._404);
+                                        }
 
-                                User user = users.get(id);
-                                if (user == null)
-                                    return response.status(Status._404);
+                                        User user = users.get(id);
+                                        if (user == null)
+                                            return response.status(Status._404);
 
-                                try {
-                                    JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-                                    for (JsonItem item : update.values()) {
-                                        if (item.isNull())
+                                        try {
+                                            if (!parseUserUpdate(request, user))
+                                                return response_400.map(response);
+                                        } catch (Exception e) {
                                             return response_400.map(response);
-                                    }
+                                        }
 
-                                    JsonItem item;
-                                    if ((item = update.get("email")) != null) {
-                                        user.email = item.asString();
-                                    }
-                                    if ((item = update.get("first_name")) != null) {
-                                        user.first_name = item.asString();
-                                    }
-                                    if ((item = update.get("last_name")) != null) {
-                                        user.last_name = item.asString();
-                                    }
-                                    if ((item = update.get("gender")) != null) {
-                                        user.gender = User.Gender.valueOf(item.asString());
-                                    }
-                                    if ((item = update.get("birth_date")) != null) {
-                                        user.birth_date = item.asLong();
-                                    }
-                                } catch (Exception e) {
-                                    return response_400.map(response);
-                                }
-
-                                user.staticResponse = prepareStaticJsonResponse(user);
-                                return response
-                                        .setBody("{}")
-                                        .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
-                            })
+                                        user.staticResponse = prepareStaticJsonResponse(user);
+                                        return response
+                                                .setBody("{}")
+                                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
+                                    })
                     )
                     .append("/locations/$id", new RestHandler()
-                            .get((request, response) -> {
-                                unmarkPosts();
-                                addCloseIfNotKeepAlive(request, response);
-                                int id;
-                                try {
-                                    id = Integer.parseInt(request.param("id"));
-                                } catch (Exception e) {
-                                    return response.status(Status._404);
-                                }
+                                    .get((request, response) -> {
+//                                addCloseIfNotKeepAlive(request, response);
+                                        int id;
+                                        try {
+                                            id = Integer.parseInt(request.param("id"));
+                                        } catch (Exception e) {
+                                            return response.status(Status._404);
+                                        }
 
-                                Location location = locations.get(id);
-                                if (location == null)
-                                    return response.status(Status._404);
+                                        Location location = locations.get(id);
+                                        if (location == null)
+                                            return response.status(Status._404);
 
-                                return response.setStaticResponse(location.staticResponse.copy());
-                            })
-                            .post((request, response) -> {
-                                markPosts();
-                                addCloseIfNotKeepAlive(request, response);
-                                int id;
-                                try {
-                                    id = Integer.parseInt(request.param("id"));
-                                } catch (Exception e) {
-                                    return response.status(Status._404);
-                                }
+                                        return response.setStaticResponse(location.staticResponse.copy());
+                                    })
+                                    .post((request, response) -> {
+//                                addCloseIfNotKeepAlive(request, response);
+                                        int id;
+                                        try {
+                                            id = Integer.parseInt(request.param("id"));
+                                        } catch (Exception e) {
+                                            return response.status(Status._404);
+                                        }
 
-                                Location location = locations.get(id);
-                                if (location == null)
-                                    return response.status(Status._404);
+                                        Location location = locations.get(id);
+                                        if (location == null)
+                                            return response.status(Status._404);
 
-                                try {
-                                    JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-                                    for (JsonItem item : update.values()) {
-                                        if (item.isNull())
+                                        try {
+                                            if (!parseLocationUpdate(request, location))
+                                                return response_400.map(response);
+                                        } catch (Exception e) {
                                             return response_400.map(response);
-                                    }
+                                        }
 
-                                    JsonItem item;
-                                    if ((item = update.get("country")) != null) {
-                                        location.country = item.asString();
-                                    }
-                                    if ((item = update.get("city")) != null) {
-                                        location.city = item.asString();
-                                    }
-                                    if ((item = update.get("place")) != null) {
-                                        location.place = item.asString();
-                                    }
-                                    if ((item = update.get("distance")) != null) {
-                                        location.distance = item.asInteger();
-                                    }
-                                } catch (Exception e) {
-                                    return response_400.map(response);
-                                }
-
-                                location.staticResponse = prepareStaticJsonResponse(location);
-                                return response
-                                        .setBody("{}")
-                                        .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                        ;
-                            })
+                                        location.staticResponse = prepareStaticJsonResponse(location);
+                                        return response
+                                                .setBody("{}")
+                                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+                                                ;
+                                    })
                     )
                     .append("/visits/$id", new RestHandler()
-                            .get((request, response) -> {
-                                unmarkPosts();
-                                addCloseIfNotKeepAlive(request, response);
-                                int id;
-                                try {
-                                    id = Integer.parseInt(request.param("id"));
-                                } catch (Exception e) {
-                                    return response_400.map(response);
-                                }
-                                Visit visit = visits.get(id);
-                                if (visit == null)
-                                    return response.status(Status._404);
-
-                                return response.setStaticResponse(visit.staticResponse.copy());
-                            })
-                            .post((request, response) -> {
-                                markPosts();
-                                addCloseIfNotKeepAlive(request, response);
-                                int id;
-                                try {
-                                    id = Integer.parseInt(request.param("id"));
-                                } catch (Exception e) {
-                                    return response_400.map(response);
-                                }
-
-                                Visit visit = visits.get(id);
-                                if (visit == null)
-                                    return response.status(Status._404)
-                                            ;
-
-                                try {
-                                    JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-                                    for (JsonItem item : update.values()) {
-                                        if (item.isNull())
+                                    .get((request, response) -> {
+//                                addCloseIfNotKeepAlive(request, response);
+                                        int id;
+                                        try {
+                                            id = Integer.parseInt(request.param("id"));
+                                        } catch (Exception e) {
                                             return response_400.map(response);
-                                    }
+                                        }
+                                        Visit visit = visits.get(id);
+                                        if (visit == null)
+                                            return response.status(Status._404);
 
-                                    JsonItem item;
-                                    if ((item = update.get("user")) != null) {
-                                        removeFromVisitMaps(visit);
-                                        visit.user = item.asInteger();
-                                        addToVisitMaps(visit);
-                                    }
-                                    if ((item = update.get("location")) != null) {
-                                        removeFromVisitMaps(visit);
-                                        visit.location = item.asInteger();
-                                        addToVisitMaps(visit);
-                                    }
-                                    if ((item = update.get("mark")) != null) {
-                                        visit.mark = item.asInteger();
-                                    }
-                                    if ((item = update.get("visited_at")) != null) {
-                                        visit.visited_at = item.asLong();
-                                    }
-                                } catch (Exception e) {
-                                    return response_400.map(response);
-                                }
+                                        return response.setStaticResponse(visit.staticResponse.copy());
+                                    })
+                                    .post((request, response) -> {
+//                                addCloseIfNotKeepAlive(request, response);
+                                        int id;
+                                        try {
+                                            id = Integer.parseInt(request.param("id"));
+                                        } catch (Exception e) {
+                                            return response_400.map(response);
+                                        }
 
-                                visit.staticResponse = prepareStaticJsonResponse(visit);
-                                return response
-                                        .setBody("{}")
-                                        .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                        ;
-                            })
+                                        Visit visit = visits.get(id);
+                                        if (visit == null)
+                                            return response.status(Status._404);
+
+                                        try {
+                                            if (!parseVisitUpdate(request, visit))
+                                                return response_400.map(response);
+                                        } catch (Exception e) {
+                                            return response_400.map(response);
+                                        }
+
+                                        visit.staticResponse = prepareStaticJsonResponse(visit);
+                                        return response
+                                                .setBody("{}")
+                                                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
+                                    })
                     )
                     .append("/users/new", new RestHandler().post((request, response) -> {
-                        markPosts();
-                        addCloseIfNotKeepAlive(request, response);
+//                        addCloseIfNotKeepAlive(request, response);
                         try {
                             UserUpdate update = JsonTools.parse(request.getBody().bytes(), UserUpdate.class);
                             if (update.id == null || update.birth_date == null || update.first_name == null
@@ -442,8 +335,7 @@ public class App extends WebApplication {
                         }
                     }))
                     .append("/locations/new", new RestHandler().post((request, response) -> {
-                        markPosts();
-                        addCloseIfNotKeepAlive(request, response);
+//                        addCloseIfNotKeepAlive(request, response);
                         try {
                             LocationUpdate update = JsonTools.parse(request.getBody().bytes(), LocationUpdate.class);
                             if (update.id == null || update.city == null || update.country == null
@@ -465,15 +357,13 @@ public class App extends WebApplication {
                             location.staticResponse = prepareStaticJsonResponse(location);
                             return response
                                     .setBody("{}")
-                                    .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                    ;
+                                    .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                         } catch (Exception e) {
                             return response_400.map(response);
                         }
                     }))
                     .append("/visits/new", new RestHandler().post((request, response) -> {
-                        markPosts();
-                        addCloseIfNotKeepAlive(request, response);
+//                        addCloseIfNotKeepAlive(request, response);
                         try {
                             Visit update = JsonTools.parse(request.getBody().bytes(), Visit.class);
                             Visit visit = visits.get(update.id);
@@ -485,14 +375,234 @@ public class App extends WebApplication {
                             update.staticResponse = prepareStaticJsonResponse(update);
                             return response
                                     .setBody("{}")
-                                    .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                                    ;
+                                    .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
                         } catch (Exception e) {
                             return response_400.map(response);
                         }
                     }))
             ;
         });
+    }
+
+    public boolean parseUserUpdate(Request request, User user) {
+        JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
+        for (JsonItem item : update.values()) {
+            if (item.isNull())
+                return false;
+        }
+
+        for (Map.Entry<String, JsonItem> entry : update.entrySet()) {
+            int hash = entry.getKey().hashCode();
+            if ("email".hashCode() == hash) {
+                user.email = entry.getValue().asString();
+            } else if ("first_name".hashCode() == hash) {
+                user.first_name = entry.getValue().asString();
+            } else if ("last_name".hashCode() == hash) {
+                user.last_name = entry.getValue().asString();
+            } else if ("gender".hashCode() == hash) {
+                user.gender = User.Gender.valueOf(entry.getValue().asString());
+            } else if ("birth_date".hashCode() == hash) {
+                user.birth_date = entry.getValue().asLong();
+            }
+        }
+
+//        JsonItem item;
+//        if ((item = update.get("email")) != null) {
+//            user.email = item.asString();
+//        }
+//        if ((item = update.get("first_name")) != null) {
+//            user.first_name = item.asString();
+//        }
+//        if ((item = update.get("last_name")) != null) {
+//            user.last_name = item.asString();
+//        }
+//        if ((item = update.get("gender")) != null) {
+//            user.gender = User.Gender.valueOf(item.asString());
+//        }
+//        if ((item = update.get("birth_date")) != null) {
+//            user.birth_date = item.asLong();
+//        }
+        return true;
+    }
+
+    public boolean parseLocationUpdate(Request request, Location location) {
+        JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
+        for (JsonItem item : update.values()) {
+            if (item.isNull())
+                return false;
+        }
+        for (Map.Entry<String, JsonItem> entry : update.entrySet()) {
+            int hash = entry.getKey().hashCode();
+            if ("country".hashCode() == hash) {
+                location.country = entry.getValue().asString();
+            } else if ("city".hashCode() == hash) {
+                location.city = entry.getValue().asString();
+            } else if ("place".hashCode() == hash) {
+                location.place = entry.getValue().asString();
+            } else if ("distance".hashCode() == hash) {
+                location.distance = entry.getValue().asInteger();
+            }
+        }
+//        JsonItem item;
+//        if ((item = update.get("country")) != null) {
+//            location.country = item.asString();
+//        }
+//        if ((item = update.get("city")) != null) {
+//            location.city = item.asString();
+//        }
+//        if ((item = update.get("place")) != null) {
+//            location.place = item.asString();
+//        }
+//        if ((item = update.get("distance")) != null) {
+//            location.distance = item.asInteger();
+//        }
+        return true;
+    }
+
+    public boolean parseVisitUpdate(Request request, Visit visit) {
+        JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
+        for (JsonItem item : update.values()) {
+            if (item.isNull())
+                return false;
+        }
+
+        for (Map.Entry<String, JsonItem> entry : update.entrySet()) {
+            int hash = entry.getKey().hashCode();
+            if ("user".hashCode() == hash) {
+                removeFromVisitMaps(visit);
+                visit.user = entry.getValue().asInteger();
+                addToVisitMaps(visit);
+            } else if ("location".hashCode() == hash) {
+                removeFromVisitMaps(visit);
+                visit.location = entry.getValue().asInteger();
+                addToVisitMaps(visit);
+            } else if ("mark".hashCode() == hash) {
+                visit.mark = entry.getValue().asInteger();
+            } else if ("visited_at".hashCode() == hash) {
+                visit.visited_at = entry.getValue().asLong();
+            }
+        }
+//        JsonItem item;
+//        if ((item = update.get("user")) != null) {
+//            removeFromVisitMaps(visit);
+//            visit.user = item.asInteger();
+//            addToVisitMaps(visit);
+//        }
+//        if ((item = update.get("location")) != null) {
+//            removeFromVisitMaps(visit);
+//            visit.location = item.asInteger();
+//            addToVisitMaps(visit);
+//        }
+//        if ((item = update.get("mark")) != null) {
+//            visit.mark = item.asInteger();
+//        }
+//        if ((item = update.get("visited_at")) != null) {
+//            visit.visited_at = item.asLong();
+//        }
+        return true;
+    }
+
+    public Stream<VisitInfo> prepareLocationVisitsStream(Request request, Stream<VisitInfo> stream) {
+        if (request.params().isEmpty())
+            return stream;
+
+        for (Map.Entry<String, MultiValue> entry : request.params().entrySet()) {
+            String value = entry.getValue().value();
+            int hash = entry.getKey().hashCode();
+            if ("fromDate".hashCode() == hash) {
+                long fromDate = Long.parseLong(value);
+                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at > fromDate); //todo put into tree-map
+            } else if ("toDate".hashCode() == hash) {
+                long toDate = Long.parseLong(value);
+                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at < toDate); //todo put into tree-map
+            } else if ("fromAge".hashCode() == hash) {
+                int fromAge = Integer.parseInt(value);
+                long ageValue = getSecondsFromAge(fromAge);
+                stream = stream.filter(visit -> visit.user.birth_date < ageValue);
+            } else if ("toAge".hashCode() == hash) {
+                int toAge = Integer.parseInt(value);
+                long ageValue = getSecondsFromAge(toAge);
+                stream = stream.filter(visit -> visit.user.birth_date > ageValue);
+            } else if ("gender".hashCode() == hash) {
+                User.Gender gender = User.Gender.valueOf(value);
+                stream = stream.filter(visit -> visit.user.gender == gender);
+            }
+        }
+//        String s;
+//        s = request.param("fromDate");
+//        if (s != null) {
+//            long fromDate = Long.parseLong(s);
+//            stream = stream.filter(visitInfo -> visitInfo.visit.visited_at > fromDate); //todo put into tree-map
+//        }
+//        s = request.param("toDate");
+//        if (s != null) {
+//            long toDate = Long.parseLong(s);
+//            stream = stream.filter(visitInfo -> visitInfo.visit.visited_at < toDate); //todo put into tree-map
+//        }
+//        s = request.param("fromAge");
+//        if (s != null) {
+//            int fromAge = Integer.parseInt(s);
+//            long ageValue = getSecondsFromAge(fromAge);
+////                                long ageValue = System.currentTimeMillis() - fromAge * 1000l * 60 * 60 * 24 * 365;
+//            stream = stream.filter(visit -> visit.user.birth_date < ageValue);
+//        }
+//        s = request.param("toAge");
+//        if (s != null) {
+//            int toAge = Integer.parseInt(s);
+//            long ageValue = getSecondsFromAge(toAge);
+////                                long ageValue = System.currentTimeMillis() - toAge * 1000l * 60 * 60 * 24 * 365;
+//            stream = stream.filter(visit -> visit.user.birth_date > ageValue);
+//        }
+//        s = request.param("gender");
+//        if (s != null) {
+//            User.Gender gender = User.Gender.valueOf(s);
+//            stream = stream.filter(visit -> visit.user.gender == gender);
+//        }
+        return stream;
+    }
+
+    public Stream<VisitInfo> prepareUserVisitsStream(Request request, Stream<VisitInfo> stream) {
+        if (request.params().isEmpty())
+            return stream;
+
+        for (Map.Entry<String, MultiValue> entry : request.params().entrySet()) {
+            String value = entry.getValue().value();
+            int hash = entry.getKey().hashCode();
+            if ("fromDate".hashCode() == hash) {
+                long fromDate = Long.parseLong(value);
+                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at > fromDate); //todo put into tree-map
+            } else if ("toDate".hashCode() == hash) {
+                long toDate = Long.parseLong(value);
+                stream = stream.filter(visitInfo -> visitInfo.visit.visited_at < toDate); //todo put into tree-map
+            } else if ("toDistance".hashCode() == hash) {
+                int toDistance = Integer.parseInt(value);
+                stream = stream.filter(visitInfo -> visitInfo.location.distance < toDistance);
+            } else if ("country".hashCode() == hash) {
+                stream = stream.filter(visitInfo -> visitInfo.location.country.hashCode() == value.hashCode() && value.equals(visitInfo.location.country));
+            }
+        }
+//        String s;
+//        s = request.param("fromDate");
+//        if (s != null) {
+//            long fromDate = Long.parseLong(s);
+//            stream = stream.filter(visitInfo -> visitInfo.visit.visited_at > fromDate); //todo put into tree-map
+//        }
+//        s = request.param("toDate");
+//        if (s != null) {
+//            long toDate = Long.parseLong(s);
+//            stream = stream.filter(visitInfo -> visitInfo.visit.visited_at < toDate); //todo put into tree-map
+//        }
+//        s = request.param("toDistance");
+//        if (s != null) {
+//            int toDistance = Integer.parseInt(s);
+//            stream = stream.filter(visitInfo -> visitInfo.location.distance < toDistance);
+//        }
+//        s = request.param("country");
+//        if (s != null) {
+//            String country = s;
+//            stream = stream.filter(visitInfo -> country.equals(visitInfo.location.country));
+//        }
+        return stream;
     }
 
     public List<VisitInfo> getMaxVisitsByLocation() {
@@ -510,25 +620,11 @@ public class App extends WebApplication {
     public void addCloseIfNotKeepAlive(com.wizzardo.http.request.Request request, Response response) {
 //        if (!request.connection().isKeepAlive())
 //            response.appendHeader(Header.KV_CONNECTION_CLOSE);
-        request.connection().setKeepAlive(true);
-        response.appendHeader(Header.KV_CONNECTION_KEEP_ALIVE);
     }
 
     public void removeFromVisitMaps(Visit visit) {
         visitsByUser.get(visit.user).removeIf(visitInfo -> visitInfo.visit.id == visit.id);
         visitsByLocation.get(visit.location).removeIf(visitInfo -> visitInfo.visit.id == visit.id);
-    }
-
-    public void markPosts() {
-        if (posts.compareAndSet(false, true)) {
-            System.out.println("============== POSTS ==============");
-        }
-    }
-
-    public void unmarkPosts() {
-        if (posts.compareAndSet(true, false)) {
-            System.out.println("============== GETS 2 ==============");
-        }
     }
 
     public void addToVisitMaps(Visit visit) {
@@ -568,9 +664,9 @@ public class App extends WebApplication {
         time = System.currentTimeMillis();
         if (!app.users.isEmpty())
             if (app.dataLength / 1024 / 1024 < 10)
-                warmUp(app, 25 - startupTime, 2000);
+                warmUp(app, 22 - startupTime, 2000);
             else
-                warmUp(app, 170 - startupTime, 3000);
+                warmUp(app, 165 - startupTime, 3000);
 
         System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
         System.gc();
@@ -609,6 +705,15 @@ public class App extends WebApplication {
 //            System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests per second:\\s+\\d+.\\d+")));
             System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 //            System.out.println(exec);
+
+            FileTools.text("/tmp/post.lua", "" +
+                    "wrk.method = \"POST\"\n" +
+                    "wrk.body   = \"" + JsonTools.serialize(app.users.get(user)).replace('"', '\'') + "\"\n" +
+                    "wrk.headers[\"Content-Type\"] = \"application/json\"" +
+                    "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 1 -d 1 -s /tmp/post.lua http://127.0.0.1:" + app.getPort() + "/users/" + user), "");
+            System.out.println("post user update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+
             Unchecked.ignore(() -> Thread.sleep(pause));
         }
     }
