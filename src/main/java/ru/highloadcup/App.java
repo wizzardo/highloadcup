@@ -3,6 +3,7 @@ package ru.highloadcup;
 import com.wizzardo.epoll.readable.ReadableByteArray;
 import com.wizzardo.epoll.readable.ReadableByteBuffer;
 import com.wizzardo.http.*;
+import com.wizzardo.http.mapping.Path;
 import com.wizzardo.http.request.Header;
 import com.wizzardo.http.request.Request;
 import com.wizzardo.http.response.Response;
@@ -46,52 +47,13 @@ public class App extends HttpServer<HttpConnection> {
     protected static final byte[] HEADER_SERVER_NAME = "Server: wizzardo-http/0.1\r\n".getBytes();
     protected static final byte[] RESPONSE_EMPTY_VISITS = {'{', '"', 'v', 'i', 's', 'i', 't', 's', '"', ':', '[', ']', '}'};
 
-    Map<Integer, User> users;
-    Map<Integer, Location> locations;
-    Map<Integer, Visit> visits;
+    public static final Mapper<Response, Response> response_400;
+    public static final Mapper<Response, Response> response_404;
+    public static final Mapper<Response, Response> response_200;
 
-    Map<Integer, List<VisitInfo>> visitsByUser;
-    Map<Integer, List<VisitInfo>> visitsByLocation;
-    long[] years;
+    static {
+        ServerDate serverDate = new ServerDate();
 
-    long dataLength;
-    Pool<byte[]> byteArrayPool = new PoolBuilder<byte[]>()
-            .queue(PoolBuilder.createThreadLocalQueueSupplier())
-            .supplier(() -> new byte[10240])
-            .holder(SimpleHolder::new)
-            .build();
-
-    @Override
-    protected void handle(HttpConnection connection) throws Exception {
-        Request request = connection.getRequest();
-        Response response = connection.getResponse();
-
-        connection.setKeepAlive(true);
-
-        handle(request, response);
-    }
-
-    public App(String[] args) {
-        Stopwatch stopwatch = new Stopwatch("initialized in");
-        initData();
-        System.out.println(stopwatch);
-        System.out.println("users: " + users.size());
-        System.out.println("locations: " + locations.size());
-        System.out.println("visits: " + visits.size());
-        System.out.println("visits by user: " + visitsByUser.size());
-        System.out.println("visits by location: " + visitsByLocation.size());
-
-        List<VisitInfo> maxVisitsByUser = getMaxVisitsByUser();
-        if (!maxVisitsByUser.isEmpty())
-            System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
-
-        List<VisitInfo> maxVisitsByLocation = getMaxVisitsByLocation();
-        if (!maxVisitsByLocation.isEmpty())
-            System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
-
-        App a = this;
-        a.setPort(8080);
-        a.setIoThreadsCount(0);
         ReadableByteBuffer static_400 = new Response()
                 .status(Status._400)
                 .setBody("")
@@ -115,292 +77,410 @@ public class App extends HttpServer<HttpConnection> {
 //                .appendHeader(Header.KV_CONNECTION_CLOSE)
                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                 .buildStaticResponse();
-        Mapper<Response, Response> response_400 = (response) -> response.setStaticResponse(static_400.copy());
-        Mapper<Response, Response> response_404 = (response) -> response.setStaticResponse(static_404.copy());
-        Mapper<Response, Response> response_200 = (response) -> response.setStaticResponse(static_200.copy());
+        response_400 = (response) -> response.setStaticResponse(static_400.copy());
+        response_404 = (response) -> response.setStaticResponse(static_404.copy());
+        response_200 = (response) -> response.setStaticResponse(static_200.copy());
+    }
+
+    Map<Integer, User> users;
+    Map<Integer, Location> locations;
+    Map<Integer, Visit> visits;
+
+    Map<Integer, List<VisitInfo>> visitsByUser;
+    Map<Integer, List<VisitInfo>> visitsByLocation;
+    long[] years;
+
+    long dataLength;
+    Pool<byte[]> byteArrayPool = new PoolBuilder<byte[]>()
+            .queue(PoolBuilder.createThreadLocalQueueSupplier())
+            .supplier(() -> new byte[10240])
+            .holder(SimpleHolder::new)
+            .build();
+
+    public App(String[] args) {
+        int port = 8080;
+        if (args.length == 1 && args[0].equals("env=prod"))
+            port = 80;
+
+        Stopwatch stopwatch = new Stopwatch("initialized in");
+        initData();
+        System.out.println(stopwatch);
+        System.out.println("users: " + users.size());
+        System.out.println("locations: " + locations.size());
+        System.out.println("visits: " + visits.size());
+        System.out.println("visits by user: " + visitsByUser.size());
+        System.out.println("visits by location: " + visitsByLocation.size());
+
+        List<VisitInfo> maxVisitsByUser = getMaxVisitsByUser();
+        if (!maxVisitsByUser.isEmpty())
+            System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
+
+        List<VisitInfo> maxVisitsByLocation = getMaxVisitsByLocation();
+        if (!maxVisitsByLocation.isEmpty())
+            System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
+
+        App a = this;
+
+        a.setPort(port);
+        a.setIoThreadsCount(0);
 
         a.getUrlMapping()
-                .append("/users/$id/visits", new RestHandler().get((request, response) -> {
-                    int id = request.params().getInt("id", -1);
-                    List<VisitInfo> visitList = visitsByUser.get(id);
-                    if (visitList == null)
-                        return response_404.map(response);
+                .append("/users/$id/visits", new RestHandler().get((request, response) -> getVisitsByUser(request.param("id"), request, response)))
+                .append("/locations/$id/avg", new RestHandler().get((request, response) -> getLocationAverageMark(request.param("id"), request, response)))
+                .append("/users/$id", new RestHandler()
+                        .get((request, response) -> getUserById(request.param("id"), request, response))
+                        .post((request, response) -> updateUser(request.param("id"), request, response))
+                )
+                .append("/locations/$id", new RestHandler()
+                        .get((request, response) -> getLocationById(request.param("id"), request, response))
+                        .post((request, response) -> updateLocation(request.param("id"), request, response))
+                )
+                .append("/visits/$id", new RestHandler()
+                        .get((request, response) -> getVisitById(request.param("id"), request, response))
+                        .post((request, response) -> updateVisit(request.param("id"), request, response))
+                )
+                .append("/users/new", new RestHandler().post(this::newUser))
+                .append("/locations/new", new RestHandler().post(this::newLocation))
+                .append("/visits/new", new RestHandler().post(this::newVisit))
+        ;
+    }
 
-                    Stream<VisitInfo> stream = visitList.stream();
-                    try {
-                        stream = prepareUserVisitsStream(request, stream);
-                    } catch (Exception e) {
-                        return response_400.map(response);
-                    }
+    @Override
+    protected void handle(HttpConnection connection) throws Exception {
+        Request request = connection.getRequest();
+        Response response = connection.getResponse();
 
-                    List<VisitInfo> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at)) //todo make collection sorted by default
-                            .collect(Collectors.toList());
+        connection.setKeepAlive(true);
 
-                    byte[] result;
-                    if (results.isEmpty()) {
-                        result = RESPONSE_EMPTY_VISITS;
-                        response.setBody(result);
-                    } else {
-                        Holder<byte[]> holder = byteArrayPool.holder();
-                        result = holder.get();
+        handle(request, response);
+    }
+
+    @Override
+    protected Response handle(Request request, Response response) throws IOException {
+        Path path = request.path();
+        if (path.length() == 2) {
+            if ("users".hashCode() == path.getPart(0).hashCode()) {
+                if (request.method() == Request.Method.GET) {
+                    response = getUserById(path.getPart(1), request, response);
+                } else {
+                    if ("new".hashCode() == path.getPart(1).hashCode())
+                        response = newUser(request, response);
+                    else
+                        response = updateUser(path.getPart(1), request, response);
+                }
+            } else if ("locations".hashCode() == path.getPart(0).hashCode()) {
+                if (request.method() == Request.Method.GET) {
+                    response = getLocationById(path.getPart(1), request, response);
+                } else {
+                    if ("new".hashCode() == path.getPart(1).hashCode())
+                        response = newLocation(request, response);
+                    else
+                        response = updateLocation(path.getPart(1), request, response);
+                }
+            } else if ("visits".hashCode() == path.getPart(0).hashCode()) {
+                if (request.method() == Request.Method.GET) {
+                    response = getVisitById(path.getPart(1), request, response);
+                } else {
+                    if ("new".hashCode() == path.getPart(1).hashCode())
+                        response = newVisit(request, response);
+                    else
+                        response = updateVisit(path.getPart(1), request, response);
+                }
+            }
+        } else if (path.length() == 3) {
+            if ("users".hashCode() == path.getPart(0).hashCode()) {
+                response = getVisitsByUser(path.getPart(1), request, response);
+            } else if ("locations".hashCode() == path.getPart(0).hashCode()) {
+                response = getLocationAverageMark(path.getPart(1), request, response);
+            }
+        } else
+            response_404.map(response);
+        return response;
+    }
+
+    protected Response updateUser(String idString, Request request, Response response) {
+        int id;
+        try {
+            id = Integer.parseInt(idString);
+        } catch (Exception e) {
+            return response_404.map(response);
+        }
+
+        User user = users.get(id);
+        if (user == null)
+            return response_404.map(response);
+
+        try {
+            if (!parseUserUpdate(request, user))
+                return response_400.map(response);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+
+        user.staticResponse = prepareStaticJsonResponse(user);
+        return response_200.map(response);
+    }
+
+    protected Response updateLocation(String idString, Request request, Response response) {
+        int id;
+        try {
+            id = Integer.parseInt(idString);
+        } catch (Exception e) {
+            return response_404.map(response);
+        }
+
+        Location location = locations.get(id);
+        if (location == null)
+            return response_404.map(response);
+
+        try {
+            if (!parseLocationUpdate(request, location))
+                return response_400.map(response);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+
+        location.staticResponse = prepareStaticJsonResponse(location);
+        return response_200.map(response);
+    }
+
+    protected Response updateVisit(String idString, Request request, Response response) {
+        int id;
+        try {
+            id = Integer.parseInt(idString);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+
+        Visit visit = visits.get(id);
+        if (visit == null)
+            return response_404.map(response);
+
+        try {
+            if (!parseVisitUpdate(request, visit))
+                return response_400.map(response);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+
+        visit.staticResponse = prepareStaticJsonResponse(visit);
+        return response_200.map(response);
+    }
+
+    protected Response getUserById(String idString, Request request, Response response) {
+        int id;
+        try {
+            id = Integer.parseInt(idString);
+        } catch (Exception e) {
+            return response_404.map(response);
+        }
+
+        User user = users.get(id);
+        if (user == null)
+            return response_404.map(response);
+
+        return response.setStaticResponse(user.staticResponse.copy());
+    }
+
+    protected Response getLocationById(String idString, Request request, Response response) {
+        int id;
+        try {
+            id = Integer.parseInt(idString);
+        } catch (Exception e) {
+            return response_404.map(response);
+        }
+
+        Location location = locations.get(id);
+        if (location == null)
+            return response_404.map(response);
+
+        return response.setStaticResponse(location.staticResponse.copy());
+    }
+
+    protected Response getVisitById(String idString, Request request, Response response) {
+        int id;
+        try {
+            id = Integer.parseInt(idString);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+        Visit visit = visits.get(id);
+        if (visit == null)
+            return response_404.map(response);
+
+        return response.setStaticResponse(visit.staticResponse.copy());
+    }
+
+    protected Response newUser(Request request, Response response) {
+        try {
+            UserUpdate update = JsonTools.parse(request.getBody().bytes(), UserUpdate.class);
+            if (update.id == null || update.birth_date == null || update.first_name == null
+                    || update.last_name == null || update.email == null || update.gender == null)
+                return response_400.map(response);
+
+            User user = users.get(update.id);
+            if (user != null)
+                return response_400.map(response);
+
+            user = new User();
+            user.birth_date = update.birth_date;
+            user.first_name = update.first_name;
+            user.last_name = update.last_name;
+            user.id = update.id;
+            user.gender = update.gender;
+            user.email = update.email;
+
+            users.put(update.id, user);
+            visitsByUser.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
+            user.staticResponse = prepareStaticJsonResponse(user);
+            return response_200.map(response);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+    }
+
+    protected Response newLocation(Request request, Response response) {
+        try {
+            LocationUpdate update = JsonTools.parse(request.getBody().bytes(), LocationUpdate.class);
+            if (update.id == null || update.city == null || update.country == null
+                    || update.place == null || update.distance == null)
+                return response_400.map(response);
+
+            Location location = locations.get(update.id);
+            if (location != null)
+                return response_400.map(response);
+
+            location = new Location();
+            location.id = update.id;
+            location.distance = update.distance;
+            location.city = update.city;
+            location.country = update.country;
+            location.place = update.place;
+            locations.put(update.id, location);
+            visitsByLocation.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
+            location.staticResponse = prepareStaticJsonResponse(location);
+            return response_200.map(response);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+    }
+
+    protected Response newVisit(Request request, Response response) {
+        try {
+            Visit update = JsonTools.parse(request.getBody().bytes(), Visit.class);
+            Visit visit = visits.get(update.id);
+            if (visit != null)
+                return response_400.map(response);
+
+            visits.put(update.id, update);
+            addToVisitMaps(update);
+            update.staticResponse = prepareStaticJsonResponse(update);
+            return response_200.map(response);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+    }
+
+    protected Response getLocationAverageMark(String idString, Request request, Response response) {
+        int id;
+        try {
+            id = Integer.parseInt(idString);
+        } catch (Exception e) {
+            return response_404.map(response);
+        }
+
+        List<VisitInfo> visitList = visitsByLocation.get(id);
+        if (visitList == null)
+            return response_404.map(response);
+
+        Stream<VisitInfo> stream = visitList.stream();
+        try {
+            stream = prepareLocationVisitsStream(request, stream);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+
+        OptionalDouble average = stream
+                .mapToDouble(visitInfo -> visitInfo.visit.mark)
+                .average();
+
+        double result = Math.round(average.orElse(0) * 100000) / 100000d;
+
+        byte[] s = new ExceptionDrivenStringBuilder().append("{\"avg\":").append(result).append("}").toBytes();
+        return response
+                .setBody(s)
+                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
+//                            .appendHeader(Header.KV_CONNECTION_CLOSE)
+                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
+    }
+
+    protected Response getVisitsByUser(String idString, Request request, Response response) {
+        int id;
+        try {
+            id = Integer.parseInt(idString);
+        } catch (Exception e) {
+            return response_404.map(response);
+        }
+
+        List<VisitInfo> visitList = visitsByUser.get(id);
+        if (visitList == null)
+            return response_404.map(response);
+
+        Stream<VisitInfo> stream = visitList.stream();
+        try {
+            stream = prepareUserVisitsStream(request, stream);
+        } catch (Exception e) {
+            return response_400.map(response);
+        }
+
+        List<VisitInfo> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at)) //todo make collection sorted by default
+                .collect(Collectors.toList());
+
+        byte[] result;
+        if (results.isEmpty()) {
+            result = RESPONSE_EMPTY_VISITS;
+            response.setBody(result);
+        } else {
+            Holder<byte[]> holder = byteArrayPool.holder();
+            result = holder.get();
 //                            int size = 1 + 2 + 2 + 1 + 6; // {"visits":[ + ] - last ',' }
 //                            for (VisitInfo vi : results) {
 //                                size += vi.getJson().length + 1;
 //                            }
 //                            result = new byte[size];
-                        result[0] = '{';
-                        result[1] = '"';
-                        result[2] = 'v';
-                        result[3] = 'i';
-                        result[4] = 's';
-                        result[5] = 'i';
-                        result[6] = 't';
-                        result[7] = 's';
-                        result[8] = '"';
-                        result[9] = ':';
-                        result[10] = '[';
-                        int offset = 11;
-                        for (VisitInfo vi : results) {
-                            byte[] json = vi.getJson();
-                            System.arraycopy(json, 0, result, offset, json.length);
-                            offset += json.length;
-                            result[offset++] = ',';
-                        }
-                        result[offset - 1] = ']';
-                        result[offset] = '}';
+            result[0] = '{';
+            result[1] = '"';
+            result[2] = 'v';
+            result[3] = 'i';
+            result[4] = 's';
+            result[5] = 'i';
+            result[6] = 't';
+            result[7] = 's';
+            result[8] = '"';
+            result[9] = ':';
+            result[10] = '[';
+            int offset = 11;
+            for (VisitInfo vi : results) {
+                byte[] json = vi.getJson();
+                System.arraycopy(json, 0, result, offset, json.length);
+                offset += json.length;
+                result[offset++] = ',';
+            }
+            result[offset - 1] = ']';
+            result[offset] = '}';
 
-                        response.setBody(new ReadableByteArray(result, 0, offset + 1) {
-                            @Override
-                            public void close() {
-                                holder.close();
-                            }
-                        });
-                    }
+            response.setBody(new ReadableByteArray(result, 0, offset + 1) {
+                @Override
+                public void close() {
+                    holder.close();
+                }
+            });
+        }
 
-                    return response
-                            .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
+        return response
+                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
 //                            .appendHeader(Header.KV_CONNECTION_CLOSE)
-                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
-                }))
-                .append("/locations/$id/avg", new RestHandler().get((request, response) -> {
-                    int id = request.params().getInt("id", -1);
-                    List<VisitInfo> visitList = visitsByLocation.get(id);
-                    if (visitList == null)
-                        return response_404.map(response);
-
-                    Stream<VisitInfo> stream = visitList.stream();
-                    try {
-                        stream = prepareLocationVisitsStream(request, stream);
-                    } catch (Exception e) {
-                        return response_400.map(response);
-                    }
-
-                    OptionalDouble average = stream
-                            .mapToDouble(visitInfo -> visitInfo.visit.mark)
-                            .average();
-
-                    double result = Math.round(average.orElse(0) * 100000) / 100000d;
-
-                    byte[] s = new ExceptionDrivenStringBuilder().append("{\"avg\":").append(result).append("}").toBytes();
-                    return response
-                            .setBody(s)
-                            .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
-//                            .appendHeader(Header.KV_CONNECTION_CLOSE)
-                            .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
-                }))
-                .append("/users/$id", new RestHandler()
-                                .get((request, response) -> {
-                                    int id;
-                                    try {
-                                        id = Integer.parseInt(request.param("id"));
-                                    } catch (Exception e) {
-                                        return response_404.map(response);
-                                    }
-
-                                    User user = users.get(id);
-                                    if (user == null)
-                                        return response_404.map(response);
-
-                                    return response.setStaticResponse(user.staticResponse.copy());
-                                })
-                                .post((request, response) -> {
-                                    int id;
-                                    try {
-                                        id = Integer.parseInt(request.param("id"));
-                                    } catch (Exception e) {
-                                        return response_404.map(response);
-                                    }
-
-                                    User user = users.get(id);
-                                    if (user == null)
-                                        return response_404.map(response);
-
-                                    try {
-                                        if (!parseUserUpdate(request, user))
-                                            return response_400.map(response);
-                                    } catch (Exception e) {
-                                        return response_400.map(response);
-                                    }
-
-//                            request.connection().setKeepAlive(false);
-
-                                    user.staticResponse = prepareStaticJsonResponse(user);
-                                    return response_200.map(response);
-                                })
-                )
-                .append("/locations/$id", new RestHandler()
-                                .get((request, response) -> {
-                                    int id;
-                                    try {
-                                        id = Integer.parseInt(request.param("id"));
-                                    } catch (Exception e) {
-                                        return response_404.map(response);
-                                    }
-
-                                    Location location = locations.get(id);
-                                    if (location == null)
-                                        return response_404.map(response);
-
-                                    return response.setStaticResponse(location.staticResponse.copy());
-                                })
-                                .post((request, response) -> {
-                                    int id;
-                                    try {
-                                        id = Integer.parseInt(request.param("id"));
-                                    } catch (Exception e) {
-                                        return response_404.map(response);
-                                    }
-
-                                    Location location = locations.get(id);
-                                    if (location == null)
-                                        return response_404.map(response);
-
-                                    try {
-                                        if (!parseLocationUpdate(request, location))
-                                            return response_400.map(response);
-                                    } catch (Exception e) {
-                                        return response_400.map(response);
-                                    }
-
-//                            request.connection().setKeepAlive(false);
-
-                                    location.staticResponse = prepareStaticJsonResponse(location);
-                                    return response_200.map(response);
-                                })
-                )
-                .append("/visits/$id", new RestHandler()
-                                .get((request, response) -> {
-                                    int id;
-                                    try {
-                                        id = Integer.parseInt(request.param("id"));
-                                    } catch (Exception e) {
-                                        return response_400.map(response);
-                                    }
-                                    Visit visit = visits.get(id);
-                                    if (visit == null)
-                                        return response_404.map(response);
-
-                                    return response.setStaticResponse(visit.staticResponse.copy());
-                                })
-                                .post((request, response) -> {
-                                    int id;
-                                    try {
-                                        id = Integer.parseInt(request.param("id"));
-                                    } catch (Exception e) {
-                                        return response_400.map(response);
-                                    }
-
-                                    Visit visit = visits.get(id);
-                                    if (visit == null)
-                                        return response_404.map(response);
-
-                                    try {
-                                        if (!parseVisitUpdate(request, visit))
-                                            return response_400.map(response);
-                                    } catch (Exception e) {
-                                        return response_400.map(response);
-                                    }
-
-//                            request.connection().setKeepAlive(false);
-
-                                    visit.staticResponse = prepareStaticJsonResponse(visit);
-                                    return response_200.map(response);
-                                })
-                )
-                .append("/users/new", new RestHandler().post((request, response) -> {
-                    try {
-                        UserUpdate update = JsonTools.parse(request.getBody().bytes(), UserUpdate.class);
-                        if (update.id == null || update.birth_date == null || update.first_name == null
-                                || update.last_name == null || update.email == null || update.gender == null)
-                            return response_400.map(response);
-
-                        User user = users.get(update.id);
-                        if (user != null)
-                            return response_400.map(response);
-
-                        user = new User();
-                        user.birth_date = update.birth_date;
-                        user.first_name = update.first_name;
-                        user.last_name = update.last_name;
-                        user.id = update.id;
-                        user.gender = update.gender;
-                        user.email = update.email;
-
-//                        request.connection().setKeepAlive(false);
-
-                        users.put(update.id, user);
-                        visitsByUser.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
-                        user.staticResponse = prepareStaticJsonResponse(user);
-                        return response_200.map(response);
-                    } catch (Exception e) {
-                        return response_400.map(response);
-                    }
-                }))
-                .append("/locations/new", new RestHandler().post((request, response) -> {
-                    try {
-                        LocationUpdate update = JsonTools.parse(request.getBody().bytes(), LocationUpdate.class);
-                        if (update.id == null || update.city == null || update.country == null
-                                || update.place == null || update.distance == null)
-                            return response_400.map(response);
-
-                        Location location = locations.get(update.id);
-                        if (location != null)
-                            return response_400.map(response);
-
-//                        request.connection().setKeepAlive(false);
-
-                        location = new Location();
-                        location.id = update.id;
-                        location.distance = update.distance;
-                        location.city = update.city;
-                        location.country = update.country;
-                        location.place = update.place;
-                        locations.put(update.id, location);
-                        visitsByLocation.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
-                        location.staticResponse = prepareStaticJsonResponse(location);
-                        return response_200.map(response);
-                    } catch (Exception e) {
-                        return response_400.map(response);
-                    }
-                }))
-                .append("/visits/new", new RestHandler().post((request, response) -> {
-                    try {
-                        Visit update = JsonTools.parse(request.getBody().bytes(), Visit.class);
-                        Visit visit = visits.get(update.id);
-                        if (visit != null)
-                            return response_400.map(response);
-
-//                        request.connection().setKeepAlive(false);
-
-                        visits.put(update.id, update);
-                        addToVisitMaps(update);
-                        update.staticResponse = prepareStaticJsonResponse(update);
-                        return response_200.map(response);
-                    } catch (Exception e) {
-                        return response_400.map(response);
-                    }
-                }))
-        ;
+                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
     }
 
     public boolean parseUserUpdate(Request request, User user) {
