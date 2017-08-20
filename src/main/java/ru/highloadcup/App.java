@@ -30,12 +30,10 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BinaryOperator;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -46,6 +44,12 @@ import java.util.zip.ZipInputStream;
 public class App extends HttpServer<HttpConnection> {
     protected static final byte[] HEADER_SERVER_NAME = "Server: wizzardo-http/0.1\r\n".getBytes();
     protected static final byte[] RESPONSE_EMPTY_VISITS = {'{', '"', 'v', 'i', 's', 'i', 't', 's', '"', ':', '[', ']', '}'};
+
+    static Pool<byte[]> byteArrayPool = new PoolBuilder<byte[]>()
+            .queue(LinkedList::new)
+            .supplier(() -> new byte[10240])
+            .holder(SimpleHolder::new)
+            .build();
 
     public static final Mapper<Response, Response> response_400;
     public static final Mapper<Response, Response> response_404;
@@ -91,13 +95,13 @@ public class App extends HttpServer<HttpConnection> {
     long[] years;
 
     long dataLength;
-    Pool<byte[]> byteArrayPool = new PoolBuilder<byte[]>()
-            .queue(PoolBuilder.createThreadLocalQueueSupplier())
-            .supplier(() -> new byte[10240])
-            .holder(SimpleHolder::new)
-            .build();
 
     public App(String[] args) {
+        //todo rewrite url-decode
+        //todo change write queue if only 1 thread to linkedlist
+        //todo replace streams with manual checks
+        //todo make flow cacheable
+
         int port = 8080;
         if (args.length == 1 && args[0].equals("env=prod"))
             port = 80;
@@ -409,7 +413,7 @@ public class App extends HttpServer<HttpConnection> {
         byte[] s = new ExceptionDrivenStringBuilder().append("{\"avg\":").append(result).append("}").toBytes();
         return response
                 .setBody(s)
-                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
+//                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
 //                            .appendHeader(Header.KV_CONNECTION_CLOSE)
                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
     }
@@ -433,60 +437,72 @@ public class App extends HttpServer<HttpConnection> {
             return response_400.map(response);
         }
 
-        List<VisitInfo> results = stream.sorted(Comparator.comparingLong(o -> o.visit.visited_at)) //todo make collection sorted by default
-                .collect(Collectors.toList());
 
-        byte[] result;
-        if (results.isEmpty()) {
-            result = RESPONSE_EMPTY_VISITS;
-            response.setBody(result);
+        VisitsReducer reducer = new VisitsReducer();
+        byte[] reduce = stream
+                .map(VisitInfo::getJson)
+                .reduce(null, reducer);
+        if (reduce == null) {
+            response.setBody(RESPONSE_EMPTY_VISITS);
         } else {
-            Holder<byte[]> holder = byteArrayPool.holder();
-            result = holder.get();
-//                            int size = 1 + 2 + 2 + 1 + 6; // {"visits":[ + ] - last ',' }
-//                            for (VisitInfo vi : results) {
-//                                size += vi.getJson().length + 1;
-//                            }
-//                            result = new byte[size];
-            result[0] = '{';
-            result[1] = '"';
-            result[2] = 'v';
-            result[3] = 'i';
-            result[4] = 's';
-            result[5] = 'i';
-            result[6] = 't';
-            result[7] = 's';
-            result[8] = '"';
-            result[9] = ':';
-            result[10] = '[';
-            int offset = 11;
-            for (VisitInfo vi : results) {
-                byte[] json = vi.getJson();
-                System.arraycopy(json, 0, result, offset, json.length);
-                offset += json.length;
-                result[offset++] = ',';
-            }
-            result[offset - 1] = ']';
-            result[offset] = '}';
-
-            response.setBody(new ReadableByteArray(result, 0, offset + 1) {
-                @Override
-                public void close() {
-                    holder.close();
-                }
-            });
+            response.setBody(reducer.toReadableByteArray());
         }
 
+//        List<VisitInfo> results = stream
+////                .sorted(Comparator.comparingLong(o -> o.visit.visited_at))
+//                .collect(Collectors.toList());
+//
+//        byte[] result;
+//        if (results.isEmpty()) {
+//            result = RESPONSE_EMPTY_VISITS;
+//            response.setBody(result);
+//        } else {
+//            Holder<byte[]> holder = byteArrayPool.holder();
+//            result = holder.get();
+////                            int size = 1 + 2 + 2 + 1 + 6; // {"visits":[ + ] - last ',' }
+////                            for (VisitInfo vi : results) {
+////                                size += vi.getJson().length + 1;
+////                            }
+////                            result = new byte[size];
+//            result[0] = '{';
+//            result[1] = '"';
+//            result[2] = 'v';
+//            result[3] = 'i';
+//            result[4] = 's';
+//            result[5] = 'i';
+//            result[6] = 't';
+//            result[7] = 's';
+//            result[8] = '"';
+//            result[9] = ':';
+//            result[10] = '[';
+//            int offset = 11;
+//            for (VisitInfo vi : results) {
+//                byte[] json = vi.getJson();
+//                System.arraycopy(json, 0, result, offset, json.length);
+//                offset += json.length;
+//                result[offset++] = ',';
+//            }
+//            result[offset - 1] = ']';
+//            result[offset] = '}';
+//
+//            response.setBody(new ReadableByteArray(result, 0, offset + 1) {
+//                @Override
+//                public void close() {
+//                    holder.close();
+//                }
+//            });
+//        }
+
         return response
-                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
+//                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
 //                            .appendHeader(Header.KV_CONNECTION_CLOSE)
                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
     }
 
     public boolean parseUserUpdate(Request request, User user) {
         JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-        for (JsonItem item : update.values()) {
-            if (item.isNull())
+        for (Map.Entry<String, JsonItem> item : update.entrySet()) {
+            if (item.getValue().isNull())
                 return false;
         }
 
@@ -509,8 +525,8 @@ public class App extends HttpServer<HttpConnection> {
 
     public boolean parseLocationUpdate(Request request, Location location) {
         JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-        for (JsonItem item : update.values()) {
-            if (item.isNull())
+        for (Map.Entry<String, JsonItem> item : update.entrySet()) {
+            if (item.getValue().isNull())
                 return false;
         }
         for (Map.Entry<String, JsonItem> entry : update.entrySet()) {
@@ -530,8 +546,8 @@ public class App extends HttpServer<HttpConnection> {
 
     public boolean parseVisitUpdate(Request request, Visit visit) {
         JsonObject update = JsonTools.parse(request.getBody().bytes()).asJsonObject();
-        for (JsonItem item : update.values()) {
-            if (item.isNull())
+        for (Map.Entry<String, JsonItem> item : update.entrySet()) {
+            if (item.getValue().isNull())
                 return false;
         }
 
@@ -549,13 +565,14 @@ public class App extends HttpServer<HttpConnection> {
                 visit.mark = entry.getValue().asInteger();
             } else if ("visited_at".hashCode() == hash) {
                 visit.visited_at = entry.getValue().asLong();
+                sortVisits(visitsByUser.get(visit.user));
             }
         }
         return true;
     }
 
     public Stream<VisitInfo> prepareLocationVisitsStream(Request request, Stream<VisitInfo> stream) {
-        if (request.params().isEmpty())
+        if (!request.hasParameters())
             return stream;
 
         for (Map.Entry<String, MultiValue> entry : request.params().entrySet()) {
@@ -584,7 +601,7 @@ public class App extends HttpServer<HttpConnection> {
     }
 
     public Stream<VisitInfo> prepareUserVisitsStream(Request request, Stream<VisitInfo> stream) {
-        if (request.params().isEmpty())
+        if (!request.hasParameters())
             return stream;
 
         for (Map.Entry<String, MultiValue> entry : request.params().entrySet()) {
@@ -629,7 +646,7 @@ public class App extends HttpServer<HttpConnection> {
     }
 
     public void addToVisitsByLocation(Visit visit) {
-        visitsByLocation.computeIfAbsent(visit.location, integer -> new CopyOnWriteArrayList<>())
+        visitsByLocation.computeIfAbsent(visit.location, integer -> new ArrayList<>(32))
                 .add(createVisitInfo(visit));
     }
 
@@ -638,8 +655,13 @@ public class App extends HttpServer<HttpConnection> {
     }
 
     public void addToVisitsByUser(Visit visit) {
-        visitsByUser.computeIfAbsent(visit.user, integer -> new CopyOnWriteArrayList<>())
-                .add(createVisitInfo(visit));
+        List<VisitInfo> visitInfos = visitsByUser.computeIfAbsent(visit.user, integer -> new ArrayList<>(32));
+        visitInfos.add(createVisitInfo(visit));
+        sortVisits(visitInfos);
+    }
+
+    public void sortVisits(List<VisitInfo> visitInfos) {
+        visitInfos.sort(Comparator.comparingLong(o -> o.visit.visited_at));
     }
 
     public long getSecondsFromAge(int age) {
@@ -662,14 +684,10 @@ public class App extends HttpServer<HttpConnection> {
             if (app.dataLength / 1024 / 1024 < 10)
                 warmUp(app, 22 - startupTime, 2000);
             else
-                warmUp(app, 165 - startupTime, 3000);
+                warmUp(app, 165 - startupTime, 4000);
 
         System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
         System.gc();
-    }
-
-    public static String formatBytes(long bytes) {
-        return bytes / 1024 / 1024 + " mb";
     }
 
     private static void warmUp(App app, float seconds, long pause) {
@@ -745,8 +763,8 @@ public class App extends HttpServer<HttpConnection> {
         this.locations = initMap(locations.locations);
         this.visits = initMap(visits.visits);
 
-        this.visitsByUser = new ConcurrentHashMap<>(this.users.size() + 1, 1f);
-        this.visitsByLocation = new ConcurrentHashMap<>(this.locations.size() + 1, 1f);
+        this.visitsByUser = new HashMap<>(this.users.size() + 1, 1f);
+        this.visitsByLocation = new HashMap<>(this.locations.size() + 1, 1f);
         for (Visit visit : visits.visits) {
             addToVisitMaps(visit);
         }
@@ -780,7 +798,7 @@ public class App extends HttpServer<HttpConnection> {
                 .setBody(serializeJson(ob))
 //                .appendHeader("Server: wizzardo-http/0.1\r\n".getBytes())
 //                .appendHeader(Header.KV_CONNECTION_CLOSE)
-                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
+//                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
                 .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                 .buildStaticResponse();
     }
@@ -790,7 +808,7 @@ public class App extends HttpServer<HttpConnection> {
     }
 
     protected <T extends WithId> Map<Integer, T> initMap(List<T> data) {
-        Map<Integer, T> map = new ConcurrentHashMap<>(data.size() + 1, 1f);
+        Map<Integer, T> map = new HashMap<>(data.size() + 1, 1f);
         for (T t : data) {
             map.put(t.id(), t);
         }
@@ -827,5 +845,55 @@ public class App extends HttpServer<HttpConnection> {
             e.printStackTrace();
         }
         return null;
+    }
+
+    public static class VisitsReducer implements BinaryOperator<byte[]> {
+
+        Holder<byte[]> holder;
+        byte[] result;
+        int offset;
+
+        protected void init() {
+            holder = byteArrayPool.holder();
+            result = holder.get();
+            result[0] = '{';
+            result[1] = '"';
+            result[2] = 'v';
+            result[3] = 'i';
+            result[4] = 's';
+            result[5] = 'i';
+            result[6] = 't';
+            result[7] = 's';
+            result[8] = '"';
+            result[9] = ':';
+            result[10] = '[';
+            offset = 11;
+        }
+
+        @Override
+        public byte[] apply(byte[] bytes, byte[] json) {
+            if (result == null)
+                init();
+
+            System.arraycopy(json, 0, result, offset, json.length);
+            offset += json.length;
+            result[offset++] = ',';
+            return json;
+        }
+
+        public int finish() {
+            result[offset - 1] = ']';
+            result[offset] = '}';
+            return offset + 1;
+        }
+
+        public ReadableByteArray toReadableByteArray() {
+            return new ReadableByteArray(result, 0, finish()) {
+                @Override
+                public void close() {
+                    holder.close();
+                }
+            };
+        }
     }
 }
