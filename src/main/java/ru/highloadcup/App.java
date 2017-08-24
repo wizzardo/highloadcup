@@ -1,7 +1,9 @@
 package ru.highloadcup;
 
+import com.wizzardo.epoll.ByteBufferProvider;
 import com.wizzardo.epoll.readable.ReadableByteArray;
 import com.wizzardo.epoll.readable.ReadableByteBuffer;
+import com.wizzardo.epoll.readable.ReadableData;
 import com.wizzardo.http.*;
 import com.wizzardo.http.mapping.Path;
 import com.wizzardo.http.request.Header;
@@ -25,11 +27,14 @@ import com.wizzardo.tools.misc.pool.SimpleHolder;
 import ru.highloadcup.domain.*;
 
 import java.io.*;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BinaryOperator;
@@ -41,7 +46,7 @@ import java.util.zip.ZipInputStream;
 /**
  * Created by Mikhail Bobrutskov on 11.08.17.
  */
-public class App extends HttpServer<HttpConnection> {
+public class App extends HttpServer<App.MeasuredHttpConnection> {
     protected static final byte[] HEADER_SERVER_NAME = "Server: wizzardo-http/0.1\r\n".getBytes();
     protected static final byte[] RESPONSE_EMPTY_VISITS = {'{', '"', 'v', 'i', 's', 'i', 't', 's', '"', ':', '[', ']', '}'};
 
@@ -79,7 +84,7 @@ public class App extends HttpServer<HttpConnection> {
                 .appendHeader(HEADER_SERVER_NAME)
                 .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
 //                .appendHeader(Header.KV_CONNECTION_CLOSE)
-                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+//                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                 .buildStaticResponse();
         response_400 = (response) -> response.setStaticResponse(static_400.copy());
         response_404 = (response) -> response.setStaticResponse(static_404.copy());
@@ -96,8 +101,125 @@ public class App extends HttpServer<HttpConnection> {
 
     long dataLength;
 
+    public static AtomicLong handleTimeCounter = new AtomicLong();
+    public static AtomicLong writeTimeCounter = new AtomicLong();
+    public static AtomicLong readTimeCounter = new AtomicLong();
+
+    public static AtomicLong userGetTimeCounter = new AtomicLong();
+    public static AtomicLong userUpdateTimeCounter = new AtomicLong();
+    public static AtomicLong userNewTimeCounter = new AtomicLong();
+    public static AtomicLong locationGetTimeCounter = new AtomicLong();
+    public static AtomicLong locationUpdateTimeCounter = new AtomicLong();
+    public static AtomicLong locationNewTimeCounter = new AtomicLong();
+    public static AtomicLong visitGetTimeCounter = new AtomicLong();
+    public static AtomicLong visitUpdateTimeCounter = new AtomicLong();
+    public static AtomicLong visitNewTimeCounter = new AtomicLong();
+    public static AtomicLong visitsTimeCounter = new AtomicLong();
+    public static AtomicLong locationsTimeCounter = new AtomicLong();
+
+    public static AtomicLong connectionsCounter = new AtomicLong();
+    public static AtomicLong requestTimeCounter = new AtomicLong();
+    public static AtomicLong requestCounter = new AtomicLong();
+    public static ConcurrentHashMap<Integer, Integer> uniqueConnections = new ConcurrentHashMap<>();
+
+    LinkedList<MeasuredHttpConnection> preparedConnections = new LinkedList<>();
+
+    private void initConnections(int n) {
+        for (int i = 0; i < n; i++) {
+            preparedConnections.add(new MeasuredHttpConnection(-1, -1, -1, this));
+        }
+    }
+
+    static class MeasuredHttpConnection extends HttpConnection {
+        long start;
+        boolean handled = false;
+
+        public MeasuredHttpConnection(int fd, int ip, int port, AbstractHttpServer server) {
+            super(fd, ip, port, server);
+        }
+
+        @Override
+        public boolean check(ByteBuffer bb) {
+            if (start == -1)
+                start = System.nanoTime();
+
+            return super.check(bb);
+        }
+
+        @Override
+        public boolean write(ByteBufferProvider bufferProvider) {
+            try {
+                return super.write(bufferProvider);
+            } finally {
+                if (handled) {
+                    requestCounter.incrementAndGet();
+                    requestTimeCounter.addAndGet(System.nanoTime() - start);
+                    start = -1;
+                    handled = false;
+                }
+            }
+        }
+
+        @Override
+        protected boolean prepareKeepAlive() {
+            return true;
+        }
+
+        @Override
+        protected boolean processInputListener() {
+            return false;
+        }
+
+        @Override
+        protected boolean processOutputListener() {
+            return false;
+        }
+
+        @Override
+        public boolean isAlive() {
+            return true;
+        }
+
+        @Override
+        public void onWriteData(ReadableData readable, boolean hasMore) {
+        }
+
+        @Override
+        protected boolean actualWrite(ReadableData readable, ByteBufferProvider bufferProvider) throws IOException {
+            long time = System.nanoTime();
+            try {
+                return super.actualWrite(readable, bufferProvider);
+            } finally {
+                writeTimeCounter.addAndGet(System.nanoTime() - time);
+            }
+        }
+
+        public ByteBuffer read(int length, ByteBufferProvider bufferProvider) throws IOException {
+            long time = System.nanoTime();
+            try {
+                return super.read(length, bufferProvider);
+            } finally {
+                readTimeCounter.addAndGet(System.nanoTime() - time);
+            }
+        }
+    }
+
+    @Override
+    protected MeasuredHttpConnection createConnection(int fd, int ip, int port) {
+        connectionsCounter.incrementAndGet();
+        uniqueConnections.put(fd, fd);
+        MeasuredHttpConnection preparedConnection = preparedConnections.poll();
+        if (preparedConnection == null)
+            preparedConnection = new MeasuredHttpConnection(fd, ip, port, this);
+        else {
+            preparedConnection.init(fd, ip, port);
+        }
+        return preparedConnection;
+//        return super.createConnection(fd, ip, port);
+//        return new MeasuredHttpConnection(fd, ip, port, this);
+    }
+
     public App(String[] args) {
-        //todo rewrite url-decode
         //todo change write queue if only 1 thread to linkedlist
         //todo replace streams with manual checks
         //todo make flow cacheable
@@ -106,27 +228,27 @@ public class App extends HttpServer<HttpConnection> {
         if (args.length == 1 && args[0].equals("env=prod"))
             port = 80;
 
-        Stopwatch stopwatch = new Stopwatch("initialized in");
+//        Stopwatch stopwatch = new Stopwatch("initialized in");
         initData();
-        System.out.println(stopwatch);
-        System.out.println("users: " + users.size());
-        System.out.println("locations: " + locations.size());
-        System.out.println("visits: " + visits.size());
-        System.out.println("visits by user: " + visitsByUser.size());
-        System.out.println("visits by location: " + visitsByLocation.size());
-
-        List<VisitInfo> maxVisitsByUser = getMaxVisitsByUser();
-        if (!maxVisitsByUser.isEmpty())
-            System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
-
-        List<VisitInfo> maxVisitsByLocation = getMaxVisitsByLocation();
-        if (!maxVisitsByLocation.isEmpty())
-            System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
+//        System.out.println(stopwatch);
+//        System.out.println("users: " + users.size());
+//        System.out.println("locations: " + locations.size());
+//        System.out.println("visits: " + visits.size());
+//        System.out.println("visits by user: " + visitsByUser.size());
+//        System.out.println("visits by location: " + visitsByLocation.size());
+//        List<VisitInfo> maxVisitsByUser = getMaxVisitsByUser();
+//        if (!maxVisitsByUser.isEmpty())
+//            System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
+//
+//        List<VisitInfo> maxVisitsByLocation = getMaxVisitsByLocation();
+//        if (!maxVisitsByLocation.isEmpty())
+//            System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
 
         App a = this;
 
         a.setPort(port);
-        a.setIoThreadsCount(0);
+//        a.setIoThreadsCount(Runtime.getRuntime().availableProcessors());
+        a.setIoThreadsCount(4);
 
         a.getUrlMapping()
                 .append("/users/$id/visits", new RestHandler().get((request, response) -> getVisitsByUser(request.param("id"), request, response)))
@@ -150,52 +272,73 @@ public class App extends HttpServer<HttpConnection> {
     }
 
     @Override
-    protected void handle(HttpConnection connection) throws Exception {
+    protected void handle(MeasuredHttpConnection connection) throws Exception {
+        long time = System.nanoTime();
         Request request = connection.getRequest();
         Response response = connection.getResponse();
 
-        connection.setKeepAlive(true);
+//        connection.setKeepAlive(true);
 
-        handle(request, response);
+        try {
+            handle(request, response);
+        } finally {
+            connection.handled = true;
+            handleTimeCounter.addAndGet(System.nanoTime() - time);
+        }
     }
 
     @Override
     protected Response handle(Request request, Response response) throws IOException {
+        long time = System.nanoTime();
         Path path = request.path();
         if (path.length() == 2) {
             if ("users".hashCode() == path.getPart(0).hashCode()) {
                 if (request.method() == Request.Method.GET) {
                     response = getUserById(path.getPart(1), request, response);
+                    userGetTimeCounter.addAndGet(System.nanoTime() - time);
                 } else {
-                    if ("new".hashCode() == path.getPart(1).hashCode())
+                    if ("new".hashCode() == path.getPart(1).hashCode()) {
                         response = newUser(request, response);
-                    else
+                        userNewTimeCounter.addAndGet(System.nanoTime() - time);
+                    } else {
                         response = updateUser(path.getPart(1), request, response);
+                        userUpdateTimeCounter.addAndGet(System.nanoTime() - time);
+                    }
                 }
             } else if ("locations".hashCode() == path.getPart(0).hashCode()) {
                 if (request.method() == Request.Method.GET) {
                     response = getLocationById(path.getPart(1), request, response);
+                    locationGetTimeCounter.addAndGet(System.nanoTime() - time);
                 } else {
-                    if ("new".hashCode() == path.getPart(1).hashCode())
+                    if ("new".hashCode() == path.getPart(1).hashCode()) {
                         response = newLocation(request, response);
-                    else
+                        locationNewTimeCounter.addAndGet(System.nanoTime() - time);
+                    } else {
                         response = updateLocation(path.getPart(1), request, response);
+                        locationUpdateTimeCounter.addAndGet(System.nanoTime() - time);
+                    }
                 }
             } else if ("visits".hashCode() == path.getPart(0).hashCode()) {
                 if (request.method() == Request.Method.GET) {
                     response = getVisitById(path.getPart(1), request, response);
+                    visitGetTimeCounter.addAndGet(System.nanoTime() - time);
                 } else {
-                    if ("new".hashCode() == path.getPart(1).hashCode())
+                    if ("new".hashCode() == path.getPart(1).hashCode()) {
                         response = newVisit(request, response);
-                    else
+                        visitNewTimeCounter.addAndGet(System.nanoTime() - time);
+                    } else {
                         response = updateVisit(path.getPart(1), request, response);
+                        visitUpdateTimeCounter.addAndGet(System.nanoTime() - time);
+                    }
                 }
             }
         } else if (path.length() == 3) {
             if ("users".hashCode() == path.getPart(0).hashCode()) {
                 response = getVisitsByUser(path.getPart(1), request, response);
+                visitsTimeCounter.addAndGet(System.nanoTime() - time);
             } else if ("locations".hashCode() == path.getPart(0).hashCode()) {
                 response = getLocationAverageMark(path.getPart(1), request, response);
+                locationsTimeCounter.addAndGet(System.nanoTime() - time);
             }
         } else
             response_404.map(response);
@@ -335,7 +478,7 @@ public class App extends HttpServer<HttpConnection> {
             user.email = update.email;
 
             users.put(update.id, user);
-            visitsByUser.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
+            visitsByUser.computeIfAbsent(update.id, integer -> new CopyOnWriteArrayList<>());
             user.staticResponse = prepareStaticJsonResponse(user);
             return response_200.map(response);
         } catch (Exception e) {
@@ -361,7 +504,7 @@ public class App extends HttpServer<HttpConnection> {
             location.country = update.country;
             location.place = update.place;
             locations.put(update.id, location);
-            visitsByLocation.computeIfAbsent(update.id, integer -> new ArrayList<>(16));
+            visitsByLocation.computeIfAbsent(update.id, integer -> new CopyOnWriteArrayList<>());
             location.staticResponse = prepareStaticJsonResponse(location);
             return response_200.map(response);
         } catch (Exception e) {
@@ -415,7 +558,8 @@ public class App extends HttpServer<HttpConnection> {
                 .setBody(s)
 //                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
 //                            .appendHeader(Header.KV_CONNECTION_CLOSE)
-                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
+//                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+                ;
     }
 
     protected Response getVisitsByUser(String idString, Request request, Response response) {
@@ -496,7 +640,8 @@ public class App extends HttpServer<HttpConnection> {
         return response
 //                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
 //                            .appendHeader(Header.KV_CONNECTION_CLOSE)
-                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON);
+//                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+                ;
     }
 
     public boolean parseUserUpdate(Request request, User user) {
@@ -646,7 +791,7 @@ public class App extends HttpServer<HttpConnection> {
     }
 
     public void addToVisitsByLocation(Visit visit) {
-        visitsByLocation.computeIfAbsent(visit.location, integer -> new ArrayList<>(32))
+        visitsByLocation.computeIfAbsent(visit.location, integer -> new CopyOnWriteArrayList<>())
                 .add(createVisitInfo(visit));
     }
 
@@ -655,7 +800,7 @@ public class App extends HttpServer<HttpConnection> {
     }
 
     public void addToVisitsByUser(Visit visit) {
-        List<VisitInfo> visitInfos = visitsByUser.computeIfAbsent(visit.user, integer -> new ArrayList<>(32));
+        List<VisitInfo> visitInfos = visitsByUser.computeIfAbsent(visit.user, integer -> new CopyOnWriteArrayList<>());
         visitInfos.add(createVisitInfo(visit));
         sortVisits(visitInfos);
     }
@@ -671,23 +816,94 @@ public class App extends HttpServer<HttpConnection> {
             return getSecondsOfAge(age);
     }
 
+    static String ip;
+
     public static void main(String[] args) {
+//        ip = TextTools.find(exec("ip addr show eth0"), Pattern.compile("inet (\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})"), 1);
+        ip = "localhost";
+
+
+////        System.out.println("uname: " + exec("uname -r"));
+//        System.out.println("tcp_low_latency: " + exec("echo 1 > /proc/sys/net/ipv4/tcp_low_latency"));
+//        System.out.println("tcp_low_latency: " + exec("cat /proc/sys/net/ipv4/tcp_low_latency"));
+//        System.out.println("tcp_fastopen: " + exec("echo 2 > /proc/sys/net/ipv4/tcp_fastopen"));
+//        System.out.println("tcp_sack: " + exec("echo 0 > /proc/sys/net/ipv4/tcp_sack"));
+//        System.out.println("tcp_timestamps: " + exec("echo 0 > /proc/sys/net/ipv4/tcp_timestamps"));
+////        System.out.println("net.ipv4.tcp_rmem: " + exec("sysctl net.ipv4.tcp_rmem"));
+//        System.out.println("tcp_no_metrics_save: " + exec("echo 1 > /proc/sys/net/ipv4/tcp_no_metrics_save"));
+////        System.out.println("sched_rt_runtime_us: " + exec("echo -1 > /proc/sys/kernel/sched_rt_runtime_us"));
+
         long time = System.currentTimeMillis();
         App app = new App(args);
+//        app.setHostname(ip);
         app.start();
         float startupTime = (System.currentTimeMillis() - time) / 1000f;
         System.out.println("App started in " + startupTime + " seconds");
+//        bindIoThreadToCpu();
 //        System.out.println(Unchecked.ignore(() -> exec("/opt/wrk -v"), "wrk failed to start"));
-
+//        bindIoThreadToCpu();
+        Monitoring.initSystemMonitoring();
         time = System.currentTimeMillis();
-        if (!app.users.isEmpty())
+        if (!app.users.isEmpty() && args.length > 0)
             if (app.dataLength / 1024 / 1024 < 10)
                 warmUp(app, 22 - startupTime, 2000);
             else
-                warmUp(app, 165 - startupTime, 4000);
+                warmUp(app, 160 - startupTime, 5000);
 
-        System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds");
+
+        app.initConnections(10000);
+        System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds. Connections openned: " + connectionsCounter.get() + " total response time: " + requestTimeCounter.get() / 1000 / 1000 + " ms, requests made: " + requestCounter.get());
+        connectionsCounter.set(0);
+        requestTimeCounter.set(0);
+        requestCounter.set(0);
+        handleTimeCounter.set(0);
+        writeTimeCounter.set(0);
+        readTimeCounter.set(0);
+        uniqueConnections.clear();
+
+        userGetTimeCounter.set(0);
+        userNewTimeCounter.set(0);
+        userUpdateTimeCounter.set(0);
+        visitGetTimeCounter.set(0);
+        visitNewTimeCounter.set(0);
+        visitUpdateTimeCounter.set(0);
+        locationGetTimeCounter.set(0);
+        locationNewTimeCounter.set(0);
+        locationUpdateTimeCounter.set(0);
+
+        locationsTimeCounter.set(0);
+        visitsTimeCounter.set(0);
         System.gc();
+    }
+
+    private static void bindIoThreadToCpu() {
+        String exec = exec("ps -aux");
+        exec = Arrays.stream(exec.split("\n")).filter(s -> s.contains("solution.jar") || s.contains("solution-all-1.0-SNAPSHOT.jar")).findFirst().get();
+        System.out.println(exec);
+        String[] split = exec.split("\\s+");
+        String pid = split[1];
+        System.out.println("pid: " + pid);
+        exec = exec("jstack " + pid);
+//        System.out.println(exec);
+        for (int i = 0; i < Math.min(Runtime.getRuntime().availableProcessors(), 4); i++) {
+            bindIoThreadToCpu(i, exec);
+        }
+//        exec = Arrays.stream(exec.split("\n")).filter(s -> s.contains("Thread-0")).findFirst().get();
+//        System.out.println(exec);
+//        String threadID = TextTools.find(exec, Pattern.compile("nid=0x([0-9a-fA-F]+)"), 1);
+//        System.out.println("threadID: " + threadID + " " + Integer.parseInt(threadID, 16));
+//        exec = exec("taskset -p -c 0 " + Integer.parseInt(threadID, 16));
+//        System.out.println(exec);
+//        exec = exec("chrt -f -p 20 " + Integer.parseInt(threadID, 16));
+//        System.out.println(exec);
+    }
+
+    private static void bindIoThreadToCpu(int i, String jstack) {
+        String exec = Arrays.stream(jstack.split("\n")).filter(s -> s.contains("IOThread-" + i)).findFirst().get();
+        String threadID = TextTools.find(exec, Pattern.compile("nid=0x([0-9a-fA-F]+)"), 1);
+        System.out.println("threadID: " + threadID + " " + Integer.parseInt(threadID, 16));
+        exec = exec("taskset -p -c " + i + " " + Integer.parseInt(threadID, 16));
+        System.out.println(exec);
     }
 
     private static void warmUp(App app, float seconds, long pause) {
@@ -697,29 +913,54 @@ public class App extends HttpServer<HttpConnection> {
         }
 
         int l;
-        while (!app.locations.containsKey(l = random.nextInt(app.locations.size()))) {
+        while (app.locations.get(l = random.nextInt(app.locations.size())) == null) {
+        }
+
+        int v;
+        while (app.visits.get(v = random.nextInt(app.visits.size())) == null) {
         }
         long time = System.currentTimeMillis();
         int user = u;
         int location = l;
+        int visit = v;
         while ((System.currentTimeMillis() - time) / 1000 < seconds) {
             String exec;
-            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 1 -d 1 http://127.0.0.1:" + app.getPort() + "/users/" + user + "/visits"), "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/users/" + user + "/visits"), "");
             System.out.println("visits by user: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
-            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 1 -d 1 http://127.0.0.1:" + app.getPort() + "/locations/" + location + "/avg"), "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/locations/" + location + "/avg"), "");
             System.out.println("locations avg: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
-            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 1 -d 1 http://127.0.0.1:" + app.getPort() + "/users/" + user), "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/users/" + user), "");
             System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/locations/" + location), "");
+            System.out.println("location by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/visits/" + visit), "");
+            System.out.println("visit by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
             FileTools.text("/tmp/post.lua", "" +
                     "wrk.method = \"POST\"\n" +
                     "wrk.body   = \"" + JsonTools.serialize(app.users.get(user)).replace('"', '\'') + "\"\n" +
                     "wrk.headers[\"Content-Type\"] = \"application/json\"" +
                     "");
-            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 1 -d 1 -s /tmp/post.lua http://127.0.0.1:" + app.getPort() + "/users/" + user), "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 -s /tmp/post.lua http://" + ip + ":" + app.getPort() + "/users/" + user), "");
             System.out.println("post user update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+
+            FileTools.text("/tmp/post.lua", "" +
+                    "wrk.method = \"POST\"\n" +
+                    "wrk.body   = \"" + JsonTools.serialize(app.locations.get(location)).replace('"', '\'') + "\"\n" +
+                    "wrk.headers[\"Content-Type\"] = \"application/json\"" +
+                    "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 -s /tmp/post.lua http://" + ip + ":" + app.getPort() + "/locations/" + location), "");
+            System.out.println("post location update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+
+            FileTools.text("/tmp/post.lua", "" +
+                    "wrk.method = \"POST\"\n" +
+                    "wrk.body   = \"" + JsonTools.serialize(app.visits.get(visit)).replace('"', '\'') + "\"\n" +
+                    "wrk.headers[\"Content-Type\"] = \"application/json\"" +
+                    "");
+            exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 -s /tmp/post.lua http://" + ip + ":" + app.getPort() + "/visits/" + visit), "");
+            System.out.println("post visit update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
             Unchecked.ignore(() -> Thread.sleep(pause));
         }
@@ -763,16 +1004,16 @@ public class App extends HttpServer<HttpConnection> {
         this.locations = initMap(locations.locations);
         this.visits = initMap(visits.visits);
 
-        this.visitsByUser = new HashMap<>(this.users.size() + 1, 1f);
-        this.visitsByLocation = new HashMap<>(this.locations.size() + 1, 1f);
+        this.visitsByUser = new ConcurrentHashMap<>(this.users.size() + 1, 1f);
+        this.visitsByLocation = new ConcurrentHashMap<>(this.locations.size() + 1, 1f);
         for (Visit visit : visits.visits) {
             addToVisitMaps(visit);
         }
         for (User user : users.users) {
-            visitsByUser.computeIfAbsent(user.id, integer -> new ArrayList<>(16));
+            visitsByUser.computeIfAbsent(user.id, integer -> new CopyOnWriteArrayList<>());
         }
         for (Location location : locations.locations) {
-            visitsByLocation.computeIfAbsent(location.id, integer -> new ArrayList<>(16));
+            visitsByLocation.computeIfAbsent(location.id, integer -> new CopyOnWriteArrayList<>());
         }
 
         for (User user : users.users) {
@@ -799,7 +1040,7 @@ public class App extends HttpServer<HttpConnection> {
 //                .appendHeader("Server: wizzardo-http/0.1\r\n".getBytes())
 //                .appendHeader(Header.KV_CONNECTION_CLOSE)
 //                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
-                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
+//                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                 .buildStaticResponse();
     }
 
@@ -808,7 +1049,7 @@ public class App extends HttpServer<HttpConnection> {
     }
 
     protected <T extends WithId> Map<Integer, T> initMap(List<T> data) {
-        Map<Integer, T> map = new HashMap<>(data.size() + 1, 1f);
+        Map<Integer, T> map = new ConcurrentHashMap<>(data.size() + 1, 1f);
         for (T t : data) {
             map.put(t.id(), t);
         }
