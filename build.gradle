@@ -18,8 +18,15 @@ repositories {
 
 
 dependencies {
+    compile 'com.koloboke:koloboke-api-jdk8:1.0.0'
+    compile 'com.koloboke:koloboke-impl-jdk8:1.0.0'
+
 //    compile 'com.wizzardo:http:0.2-SNAPSHOT'
-    compile 'com.wizzardo:datadog-jvm:0.4+'
+//    compile 'com.wizzardo:datadog-jvm:0.4+'
+    compile('com.wizzardo:datadog-jvm:0.4+') {
+        exclude module: 'tools'
+        exclude group: 'com.indeed'
+    }
 
     compile files('../http/build/libs/http-all-0.1-SNAPSHOT.jar')
     testCompile group: 'junit', name: 'junit', version: '4.11'
@@ -32,6 +39,10 @@ task fatJar(type: Jar) {
         )
     }
     baseName = project.name + '-all'
-    from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+    from {
+        configurations.compile
+                .findAll { !String.valueOf(it).contains('koloboke') }
+                .collect { it.isDirectory() ? it : zipTree(it) }
+    }
     with jar
 }

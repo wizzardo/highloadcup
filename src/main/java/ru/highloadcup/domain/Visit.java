@@ -13,7 +13,7 @@ public class Visit implements WithId {
     public long visited_at;
     public int mark;
 
-    public transient ReadableByteBuffer staticResponse;
+//    public transient ReadableByteBuffer staticResponse;
 
     @Override
     public int id() {
