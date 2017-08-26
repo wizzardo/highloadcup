@@ -123,11 +123,14 @@ public class Monitoring {
             sb.append("vt:").append(App.visitsTimeCounter.getAndSet(0)).append(";");
             sb.append("lt:").append(App.locationsTimeCounter.getAndSet(0)).append(";");
 
-//            sb.append("gc:").append(client.events.get("jvm.gc.time").stream().mapToDouble(event -> Double.parseDouble(event.value)).sum()).append(";");
-//            sb.append("mu:").append(client.events.get("jvm.mp.used").stream().mapToLong(event -> Long.parseLong(event.value) / 1024 / 1024).sum()).append(";");
-//            sb.append("bu:").append(client.events.get("jvm.buffers.memory_used").stream().mapToLong(event -> Long.parseLong(event.value) / 1024 / 1024).sum()).append(";");
+            sb.append("gc:").append(client.events.get("jvm.gc.time").stream().mapToDouble(event -> Double.parseDouble(event.value)).sum()).append(";");
+            sb.append("mu:").append(client.events.get("jvm.mp.used").stream().mapToLong(event -> Long.parseLong(event.value) / 1024 / 1024).sum()).append(";");
+            sb.append("mc:").append(client.events.get("jvm.mp.committed").stream().mapToLong(event -> Long.parseLong(event.value) / 1024 / 1024).sum()).append(";");
+            sb.append("bu:").append(client.events.get("jvm.buffers.memory_used").stream().mapToLong(event -> Long.parseLong(event.value) / 1024 / 1024).sum()).append(";");
 //            sb.append("ct:").append(client.events.get("jvm.compilation.time").stream().mapToLong(event -> Long.parseLong(event.value)).sum()).append(";");
-//            sb.append("a:").append(client.events.getOrDefault("jvm.thread.allocation", Collections.emptyList()).stream().filter(event -> event.tags.contains("Thread-0")).mapToLong(event -> Long.parseLong(event.value) / 1024).sum()).append(";");
+            sb.append("a:").append(client.events.getOrDefault("jvm.thread.allocation", Collections.emptyList()).stream()
+//                    .filter(event -> event.tags.contains("Thread-0"))
+                    .mapToLong(event -> Long.parseLong(event.value) / 1024 / 1024).sum()).append(";");
 //            sb.append("c:").append(client.events.getOrDefault("jvm.thread.cpu.nanos", Collections.emptyList()).stream().filter(event -> event.tags.contains("Thread-0")).mapToLong(event -> Long.parseLong(event.value) / 1000 / 1000).sum()).append(";");
 //            sb.append("cu:").append(client.events.getOrDefault("jvm.thread.cpu.user.nanos", Collections.emptyList()).stream().filter(event -> event.tags.contains("Thread-0")).mapToLong(event -> Long.parseLong(event.value) / 1000 / 1000).sum()).append(";");
 //            sb.append("ct:").append(client.events.getOrDefault("jvm.thread.cpu.nanos", Collections.emptyList()).stream().mapToLong(event -> Long.parseLong(event.value) / 1000 / 1000).sum()).append(";");
