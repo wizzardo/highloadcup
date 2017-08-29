@@ -25,5 +25,5 @@ CMD mkdir ./lib
 COPY koloboke*.jar ./lib/
 
 ADD build/libs/solution-all-1.0-SNAPSHOT.jar /opt/solution.jar
-CMD java -XX:+UseCompressedOops -XX:+UseG1GC -Xmx3500m -Xms3500m -XX:+AggressiveOpts -verbose:gc -server -cp "solution.jar:/opt/lib/*" ru.highloadcup.App env=prod
+CMD java -XX:+UseCompressedOops -XX:+UseG1GC -Xmx3500m -Xms3500m -XX:NewSize=800m -XX:MaxNewSize=800m -XX:MaxGCPauseMillis=500 -XX:+AggressiveOpts -verbose:gc -server -cp "solution.jar:/opt/lib/*" ru.highloadcup.App env=prod
 

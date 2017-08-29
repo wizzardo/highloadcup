@@ -19,7 +19,6 @@ import com.wizzardo.tools.json.JsonItem;
 import com.wizzardo.tools.json.JsonObject;
 import com.wizzardo.tools.json.JsonTools;
 import com.wizzardo.tools.misc.ExceptionDrivenStringBuilder;
-import com.wizzardo.tools.misc.Stopwatch;
 import com.wizzardo.tools.misc.TextTools;
 import com.wizzardo.tools.misc.Unchecked;
 import com.wizzardo.tools.misc.pool.Holder;
@@ -36,7 +35,6 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BinaryOperator;
@@ -101,8 +99,8 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
     HashIntObjMap<Location> locations;
     HashIntObjMap<Visit> visits;
 
-    HashIntObjMap<ArrayList<VisitInfo>> visitsByUser;
-    HashIntObjMap<ArrayList<VisitInfo>> visitsByLocation;
+    volatile HashIntObjMap<ArrayList<VisitInfo>> visitsByUser;
+    volatile HashIntObjMap<ArrayList<VisitInfo>> visitsByLocation;
     long[] years;
 
     long dataLength;
@@ -129,6 +127,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
     public static ConcurrentHashMap<Integer, Integer> uniqueConnections = new ConcurrentHashMap<>();
 
     LinkedList<MeasuredHttpConnection> preparedConnections = new LinkedList<>();
+    private long baseTime;
 
     private void initConnections(int n) {
         for (int i = 0; i < n; i++) {
@@ -222,41 +221,21 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         }
         return preparedConnection;
 //        return super.createConnection(fd, ip, port);
-//        return new MeasuredHttpConnection(fd, ip, port, this);
     }
 
     public App(String[] args) {
-        //todo change write queue if only 1 thread to linkedlist
-        //todo replace streams with manual checks
-        //todo make flow cacheable
 
         int port = 8080;
         if (args.length == 1 && args[0].equals("env=prod"))
             port = 80;
 
-//        Stopwatch stopwatch = new Stopwatch("initialized in");
         initData();
-//        System.out.println(stopwatch);
-//        System.out.println("users: " + users.size());
-//        System.out.println("locations: " + locations.size());
-//        System.out.println("visits: " + visits.size());
-//        System.out.println("visits by user: " + visitsByUser.size());
-//        System.out.println("visits by location: " + visitsByLocation.size());
-//        List<VisitInfo> maxVisitsByUser = getMaxVisitsByUser();
-//        if (!maxVisitsByUser.isEmpty())
-//            System.out.println("max visits by user." + maxVisitsByUser.get(0).user.id + ": " + maxVisitsByUser.size());
-//
-//        List<VisitInfo> maxVisitsByLocation = getMaxVisitsByLocation();
-//        if (!maxVisitsByLocation.isEmpty())
-//            System.out.println("max visits by location." + maxVisitsByLocation.get(0).location.id + ": " + maxVisitsByLocation.size());
-
         App a = this;
 
         a.setPort(port);
-//        a.setIoThreadsCount(Runtime.getRuntime().availableProcessors());
 
         //change pool queue if >0
-        a.setIoThreadsCount(0);
+        a.setIoThreadsCount(3);
 
         a.getUrlMapping()
                 .append("/users/$id/visits", new RestHandler().get((request, response) -> getVisitsByUser(request.param("id"), request, response)))
@@ -414,7 +393,6 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
             return response_400.map(response);
         }
 
-//        visit.staticResponse = prepareStaticJsonResponse(visit);
         return response_200.map(response);
     }
 
@@ -459,7 +437,6 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         if (visit == null)
             return response_404.map(response);
 
-//        return response.setStaticResponse(visit.staticResponse.copy());
         return response.setBody(JsonTools.serializeToBytes(visit));
     }
 
@@ -483,8 +460,10 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
             user.gender = update.gender;
             user.email = update.email;
 
-            users.put(id, user);
-            visitsByUser.computeIfAbsent(id, integer -> new ArrayList<>());
+            synchronized (this) {
+                users.put(id, user);
+                visitsByUser.computeIfAbsent(id, integer -> new ArrayList<>());
+            }
             user.staticResponse = prepareStaticJsonResponse(user);
             return response_200.map(response);
         } catch (Exception e) {
@@ -510,8 +489,10 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
             location.city = update.city;
             location.country = update.country;
             location.place = update.place;
-            locations.put(id, location);
-            visitsByLocation.computeIfAbsent(id, integer -> new ArrayList<>());
+            synchronized (this) {
+                locations.put(id, location);
+                visitsByLocation.computeIfAbsent(id, integer -> new ArrayList<>());
+            }
             location.staticResponse = prepareStaticJsonResponse(location);
             return response_200.map(response);
         } catch (Exception e) {
@@ -526,9 +507,10 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
             if (visit != null)
                 return response_400.map(response);
 
-            visits.put(update.id, update);
-            addToVisitMaps(update);
-//            update.staticResponse = prepareStaticJsonResponse(update);
+            synchronized (this) {
+                visits.put(update.id, update);
+                addToVisitMaps(update);
+            }
             return response_200.map(response);
         } catch (Exception e) {
             return response_400.map(response);
@@ -561,12 +543,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         double result = Math.round(average.orElse(0) * 100000) / 100000d;
 
         byte[] s = new ExceptionDrivenStringBuilder().append("{\"avg\":").append(result).append("}").toBytes();
-        return response
-                .setBody(s)
-//                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
-//                            .appendHeader(Header.KV_CONNECTION_CLOSE)
-//                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                ;
+        return response.setBody(s);
     }
 
     protected Response getVisitsByUser(String idString, Request request, Response response) {
@@ -590,65 +567,14 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
 
 
         VisitsReducer reducer = new VisitsReducer();
-        VisitInfo reduce = stream
-//                .map(VisitInfo::getJson)
-                .reduce(null, reducer);
+        VisitInfo reduce = stream.reduce(null, reducer);
         if (reduce == null) {
             response.setBody(RESPONSE_EMPTY_VISITS);
         } else {
             response.setBody(reducer.toReadableByteArray());
         }
 
-//        List<VisitInfo> results = stream
-////                .sorted(Comparator.comparingLong(o -> o.visit.visited_at))
-//                .collect(Collectors.toList());
-//
-//        byte[] result;
-//        if (results.isEmpty()) {
-//            result = RESPONSE_EMPTY_VISITS;
-//            response.setBody(result);
-//        } else {
-//            Holder<byte[]> holder = byteArrayPool.holder();
-//            result = holder.get();
-////                            int size = 1 + 2 + 2 + 1 + 6; // {"visits":[ + ] - last ',' }
-////                            for (VisitInfo vi : results) {
-////                                size += vi.getJson().length + 1;
-////                            }
-////                            result = new byte[size];
-//            result[0] = '{';
-//            result[1] = '"';
-//            result[2] = 'v';
-//            result[3] = 'i';
-//            result[4] = 's';
-//            result[5] = 'i';
-//            result[6] = 't';
-//            result[7] = 's';
-//            result[8] = '"';
-//            result[9] = ':';
-//            result[10] = '[';
-//            int offset = 11;
-//            for (VisitInfo vi : results) {
-//                byte[] json = vi.getJson();
-//                System.arraycopy(json, 0, result, offset, json.length);
-//                offset += json.length;
-//                result[offset++] = ',';
-//            }
-//            result[offset - 1] = ']';
-//            result[offset] = '}';
-//
-//            response.setBody(new ReadableByteArray(result, 0, offset + 1) {
-//                @Override
-//                public void close() {
-//                    holder.close();
-//                }
-//            });
-//        }
-
-        return response
-//                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
-//                            .appendHeader(Header.KV_CONNECTION_CLOSE)
-//                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
-                ;
+        return response;
     }
 
     public boolean parseUserUpdate(Request request, User user) {
@@ -703,21 +629,23 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
                 return false;
         }
 
-        for (Map.Entry<String, JsonItem> entry : update.entrySet()) {
-            int hash = entry.getKey().hashCode();
-            if ("user".hashCode() == hash) {
-                removeFromVisitMaps(visit);
-                visit.user = entry.getValue().asInteger();
-                addToVisitMaps(visit);
-            } else if ("location".hashCode() == hash) {
-                removeFromVisitMaps(visit);
-                visit.location = entry.getValue().asInteger();
-                addToVisitMaps(visit);
-            } else if ("mark".hashCode() == hash) {
-                visit.mark = entry.getValue().asInteger();
-            } else if ("visited_at".hashCode() == hash) {
-                visit.visited_at = entry.getValue().asLong();
-                sortVisits(visitsByUser.get(visit.user));
+        synchronized (this) {
+            for (Map.Entry<String, JsonItem> entry : update.entrySet()) {
+                int hash = entry.getKey().hashCode();
+                if ("user".hashCode() == hash) {
+                    removeFromVisitMaps(visit);
+                    visit.user = entry.getValue().asInteger();
+                    addToVisitMaps(visit);
+                } else if ("location".hashCode() == hash) {
+                    removeFromVisitMaps(visit);
+                    visit.location = entry.getValue().asInteger();
+                    addToVisitMaps(visit);
+                } else if ("mark".hashCode() == hash) {
+                    visit.mark = entry.getValue().asInteger();
+                } else if ("visited_at".hashCode() == hash) {
+                    visit.visited_at = entry.getValue().asLong();
+                    sortVisits(visitsByUser.get(visit.user));
+                }
             }
         }
         return true;
@@ -775,14 +703,6 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         return stream;
     }
 
-//    public List<VisitInfo> getMaxVisitsByLocation() {
-//        return visitsByLocation.values().stream().max(Comparator.comparingInt(List::size)).orElse(Collections.emptyList());
-//    }
-//
-//    public List<VisitInfo> getMaxVisitsByUser() {
-//        return visitsByUser.values().stream().max(Comparator.comparingInt(List::size)).orElse(Collections.emptyList());
-//    }
-
     public byte[] serializeJson(Object data) {
         return JsonTools.serializeToBytes(data);
     }
@@ -820,7 +740,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         if (age < years.length)
             return years[age];
         else
-            return getSecondsOfAge(age);
+            return getSecondsOfAge(age, baseTime);
     }
 
     static String ip;
@@ -830,25 +750,12 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
 //        ip = TextTools.find(exec("ip addr show eth0"), Pattern.compile("inet (\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})"), 1);
         ip = "localhost";
 
-
-////        System.out.println("uname: " + exec("uname -r"));
-//        System.out.println("tcp_low_latency: " + exec("echo 1 > /proc/sys/net/ipv4/tcp_low_latency"));
-//        System.out.println("tcp_low_latency: " + exec("cat /proc/sys/net/ipv4/tcp_low_latency"));
-//        System.out.println("tcp_fastopen: " + exec("echo 2 > /proc/sys/net/ipv4/tcp_fastopen"));
-//        System.out.println("tcp_sack: " + exec("echo 0 > /proc/sys/net/ipv4/tcp_sack"));
-//        System.out.println("tcp_timestamps: " + exec("echo 0 > /proc/sys/net/ipv4/tcp_timestamps"));
-////        System.out.println("net.ipv4.tcp_rmem: " + exec("sysctl net.ipv4.tcp_rmem"));
-//        System.out.println("tcp_no_metrics_save: " + exec("echo 1 > /proc/sys/net/ipv4/tcp_no_metrics_save"));
-////        System.out.println("sched_rt_runtime_us: " + exec("echo -1 > /proc/sys/kernel/sched_rt_runtime_us"));
-
         long time = System.currentTimeMillis();
         App app = new App(args);
 //        app.setHostname(ip);
         app.start();
         float startupTime = (System.currentTimeMillis() - time) / 1000f;
         System.out.println("App started in " + startupTime + " seconds");
-//        bindIoThreadToCpu();
-//        System.out.println(Unchecked.ignore(() -> exec("/opt/wrk -v"), "wrk failed to start"));
 //        bindIoThreadToCpu();
         time = System.currentTimeMillis();
         if (!app.users.isEmpty() && args.length > 0)
@@ -980,6 +887,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         Users users = new Users();
         Visits visits = new Visits();
         AtomicLong sizeCounter = new AtomicLong();
+        boolean limitData = false;
         Unchecked.run(() -> {
             if (!zipFile.exists())
                 return;
@@ -995,11 +903,11 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
                 String json = out.toString();
                 out.reset();
 
-                if (name.startsWith("locations"))
+                if (name.startsWith("locations") && !(limitData && locations.locations.size() > 1000))
                     locations.locations.addAll(JsonTools.parse(json, Locations.class).locations);
-                else if (name.startsWith("users"))
+                else if (name.startsWith("users") && !(limitData && users.users.size() > 1000))
                     users.users.addAll(JsonTools.parse(json, Users.class).users);
-                else if (name.startsWith("visits"))
+                else if (name.startsWith("visits") && !(limitData && visits.visits.size() > 1000))
                     visits.visits.addAll(JsonTools.parse(json, Visits.class).visits);
             }
             IOTools.close(zip);
@@ -1049,25 +957,33 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
 //        }
 //        System.out.println("\tstatic responses for visits: " + visits.visits.stream().mapToLong(it -> it.staticResponse.length()).sum());
 
+        baseTime = getTime();
+        System.out.println("base time: " + baseTime);
         long[] years = new long[256];
         for (int i = 0; i < years.length; i++) {
-            years[i] = getSecondsOfAge(i);
+            years[i] = getSecondsOfAge(i, baseTime);
         }
         this.years = years;
+    }
+
+    protected long getTime() {
+        if (new File("/tmp/data/options.txt").exists()) {
+            String text = FileTools.text("/tmp/data/options.txt");
+            String value = text.split("[\r\n]")[0].trim();
+            return Long.parseLong(value);
+        }
+
+        return System.currentTimeMillis() / 1000;
     }
 
     private ReadableByteBuffer prepareStaticJsonResponse(Object ob) {
         return new Response()
                 .setBody(serializeJson(ob))
-//                .appendHeader("Server: wizzardo-http/0.1\r\n".getBytes())
-//                .appendHeader(Header.KV_CONNECTION_CLOSE)
-//                .appendHeader(Header.KV_CONNECTION_KEEP_ALIVE)
-//                .appendHeader(Header.KV_CONTENT_TYPE_APPLICATION_JSON)
                 .buildStaticResponse();
     }
 
-    private long getSecondsOfAge(int i) {
-        return LocalDateTime.now().minus(i, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC); // todo reset current time
+    private long getSecondsOfAge(int i, long baseTime) {
+        return LocalDateTime.ofEpochSecond(baseTime, 0, ZoneOffset.UTC).minus(i, ChronoUnit.YEARS).toEpochSecond(ZoneOffset.UTC); // todo reset current time
     }
 
     protected <T extends WithId> HashIntObjMap<T> initMap(List<T> data) {
@@ -1140,8 +1056,6 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
                 init();
 
             offset = vi.writeTo(result, offset);
-//            System.arraycopy(json, 0, result, offset, json.length);
-//            offset += json.length;
             result[offset++] = ',';
             return vi;
         }
