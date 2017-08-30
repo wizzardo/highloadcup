@@ -108,26 +108,26 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
 
     long dataLength;
 
-    public static AtomicLong handleTimeCounter = new AtomicLong();
-    public static AtomicLong writeTimeCounter = new AtomicLong();
-    public static AtomicLong readTimeCounter = new AtomicLong();
-
-    public static AtomicLong userGetTimeCounter = new AtomicLong();
-    public static AtomicLong userUpdateTimeCounter = new AtomicLong();
-    public static AtomicLong userNewTimeCounter = new AtomicLong();
-    public static AtomicLong locationGetTimeCounter = new AtomicLong();
-    public static AtomicLong locationUpdateTimeCounter = new AtomicLong();
-    public static AtomicLong locationNewTimeCounter = new AtomicLong();
-    public static AtomicLong visitGetTimeCounter = new AtomicLong();
-    public static AtomicLong visitUpdateTimeCounter = new AtomicLong();
-    public static AtomicLong visitNewTimeCounter = new AtomicLong();
-    public static AtomicLong visitsTimeCounter = new AtomicLong();
-    public static AtomicLong locationsTimeCounter = new AtomicLong();
-
-    public static AtomicLong connectionsCounter = new AtomicLong();
-    public static AtomicLong requestTimeCounter = new AtomicLong();
-    public static AtomicLong requestCounter = new AtomicLong();
-    public static ConcurrentHashMap<Integer, Integer> uniqueConnections = new ConcurrentHashMap<>();
+//    public static AtomicLong handleTimeCounter = new AtomicLong();
+//    public static AtomicLong writeTimeCounter = new AtomicLong();
+//    public static AtomicLong readTimeCounter = new AtomicLong();
+//
+//    public static AtomicLong userGetTimeCounter = new AtomicLong();
+//    public static AtomicLong userUpdateTimeCounter = new AtomicLong();
+//    public static AtomicLong userNewTimeCounter = new AtomicLong();
+//    public static AtomicLong locationGetTimeCounter = new AtomicLong();
+//    public static AtomicLong locationUpdateTimeCounter = new AtomicLong();
+//    public static AtomicLong locationNewTimeCounter = new AtomicLong();
+//    public static AtomicLong visitGetTimeCounter = new AtomicLong();
+//    public static AtomicLong visitUpdateTimeCounter = new AtomicLong();
+//    public static AtomicLong visitNewTimeCounter = new AtomicLong();
+//    public static AtomicLong visitsTimeCounter = new AtomicLong();
+//    public static AtomicLong locationsTimeCounter = new AtomicLong();
+//
+//    public static AtomicLong connectionsCounter = new AtomicLong();
+//    public static AtomicLong requestTimeCounter = new AtomicLong();
+//    public static AtomicLong requestCounter = new AtomicLong();
+//    public static ConcurrentHashMap<Integer, Integer> uniqueConnections = new ConcurrentHashMap<>();
 
     LinkedList<MeasuredHttpConnection> preparedConnections = new LinkedList<>();
     private long baseTime;
@@ -146,27 +146,27 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
             super(fd, ip, port, server);
         }
 
-        @Override
-        public boolean check(ByteBuffer bb) {
-            if (start == -1)
-                start = System.nanoTime();
-
-            return super.check(bb);
-        }
-
-        @Override
-        public boolean write(ByteBufferProvider bufferProvider) {
-            try {
-                return super.write(bufferProvider);
-            } finally {
-                if (handled) {
-                    requestCounter.incrementAndGet();
-                    requestTimeCounter.addAndGet(System.nanoTime() - start);
-                    start = -1;
-                    handled = false;
-                }
-            }
-        }
+//        @Override
+//        public boolean check(ByteBuffer bb) {
+//            if (start == -1)
+//                start = System.nanoTime();
+//
+//            return super.check(bb);
+//        }
+//
+//        @Override
+//        public boolean write(ByteBufferProvider bufferProvider) {
+//            try {
+//                return super.write(bufferProvider);
+//            } finally {
+//                if (handled) {
+//                    requestCounter.incrementAndGet();
+//                    requestTimeCounter.addAndGet(System.nanoTime() - start);
+//                    start = -1;
+//                    handled = false;
+//                }
+//            }
+//        }
 
         @Override
         protected boolean prepareKeepAlive() {
@@ -192,30 +192,30 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         public void onWriteData(ReadableData readable, boolean hasMore) {
         }
 
-        @Override
-        protected boolean actualWrite(ReadableData readable, ByteBufferProvider bufferProvider) throws IOException {
-            long time = System.nanoTime();
-            try {
-                return super.actualWrite(readable, bufferProvider);
-            } finally {
-                writeTimeCounter.addAndGet(System.nanoTime() - time);
-            }
-        }
-
-        public ByteBuffer read(int length, ByteBufferProvider bufferProvider) throws IOException {
-            long time = System.nanoTime();
-            try {
-                return super.read(length, bufferProvider);
-            } finally {
-                readTimeCounter.addAndGet(System.nanoTime() - time);
-            }
-        }
+//        @Override
+//        protected boolean actualWrite(ReadableData readable, ByteBufferProvider bufferProvider) throws IOException {
+//            long time = System.nanoTime();
+//            try {
+//                return super.actualWrite(readable, bufferProvider);
+//            } finally {
+//                writeTimeCounter.addAndGet(System.nanoTime() - time);
+//            }
+//        }
+//
+//        public ByteBuffer read(int length, ByteBufferProvider bufferProvider) throws IOException {
+//            long time = System.nanoTime();
+//            try {
+//                return super.read(length, bufferProvider);
+//            } finally {
+//                readTimeCounter.addAndGet(System.nanoTime() - time);
+//            }
+//        }
     }
 
     @Override
     protected MeasuredHttpConnection createConnection(int fd, int ip, int port) {
-        connectionsCounter.incrementAndGet();
-        uniqueConnections.put(fd, fd);
+//        connectionsCounter.incrementAndGet();
+//        uniqueConnections.put(fd, fd);
         MeasuredHttpConnection preparedConnection = preparedConnections.poll();
         if (preparedConnection == null)
             preparedConnection = new MeasuredHttpConnection(fd, ip, port, this);
@@ -263,68 +263,68 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
 
     @Override
     protected void handle(MeasuredHttpConnection connection) throws Exception {
-        long time = System.nanoTime();
+//        long time = System.nanoTime();
 
-        try {
+//        try {
             handle(connection.getRequest(), connection.getResponse());
-        } finally {
-            connection.handled = true;
-            handleTimeCounter.addAndGet(System.nanoTime() - time);
-        }
+//        } finally {
+//            connection.handled = true;
+//            handleTimeCounter.addAndGet(System.nanoTime() - time);
+//        }
     }
 
     @Override
     protected Response handle(Request request, Response response) throws IOException {
-        long time = System.nanoTime();
+//        long time = System.nanoTime();
         Path path = request.path();
         if (path.length() == 2) {
             if ("users".hashCode() == path.getPart(0).hashCode()) {
                 if (request.method() == Request.Method.GET) {
                     response = getUserById(path.getPart(1), request, response);
-                    userGetTimeCounter.addAndGet(System.nanoTime() - time);
+//                    userGetTimeCounter.addAndGet(System.nanoTime() - time);
                 } else {
                     if ("new".hashCode() == path.getPart(1).hashCode()) {
                         response = newUser(request, response);
-                        userNewTimeCounter.addAndGet(System.nanoTime() - time);
+//                        userNewTimeCounter.addAndGet(System.nanoTime() - time);
                     } else {
                         response = updateUser(path.getPart(1), request, response);
-                        userUpdateTimeCounter.addAndGet(System.nanoTime() - time);
+//                        userUpdateTimeCounter.addAndGet(System.nanoTime() - time);
                     }
                 }
             } else if ("locations".hashCode() == path.getPart(0).hashCode()) {
                 if (request.method() == Request.Method.GET) {
                     response = getLocationById(path.getPart(1), request, response);
-                    locationGetTimeCounter.addAndGet(System.nanoTime() - time);
+//                    locationGetTimeCounter.addAndGet(System.nanoTime() - time);
                 } else {
                     if ("new".hashCode() == path.getPart(1).hashCode()) {
                         response = newLocation(request, response);
-                        locationNewTimeCounter.addAndGet(System.nanoTime() - time);
+//                        locationNewTimeCounter.addAndGet(System.nanoTime() - time);
                     } else {
                         response = updateLocation(path.getPart(1), request, response);
-                        locationUpdateTimeCounter.addAndGet(System.nanoTime() - time);
+//                        locationUpdateTimeCounter.addAndGet(System.nanoTime() - time);
                     }
                 }
             } else if ("visits".hashCode() == path.getPart(0).hashCode()) {
                 if (request.method() == Request.Method.GET) {
                     response = getVisitById(path.getPart(1), request, response);
-                    visitGetTimeCounter.addAndGet(System.nanoTime() - time);
+//                    visitGetTimeCounter.addAndGet(System.nanoTime() - time);
                 } else {
                     if ("new".hashCode() == path.getPart(1).hashCode()) {
                         response = newVisit(request, response);
-                        visitNewTimeCounter.addAndGet(System.nanoTime() - time);
+//                        visitNewTimeCounter.addAndGet(System.nanoTime() - time);
                     } else {
                         response = updateVisit(path.getPart(1), request, response);
-                        visitUpdateTimeCounter.addAndGet(System.nanoTime() - time);
+//                        visitUpdateTimeCounter.addAndGet(System.nanoTime() - time);
                     }
                 }
             }
         } else if (path.length() == 3) {
             if ("users".hashCode() == path.getPart(0).hashCode()) {
                 response = getVisitsByUser(path.getPart(1), request, response);
-                visitsTimeCounter.addAndGet(System.nanoTime() - time);
+//                visitsTimeCounter.addAndGet(System.nanoTime() - time);
             } else if ("locations".hashCode() == path.getPart(0).hashCode()) {
                 response = getLocationAverageMark(path.getPart(1), request, response);
-                locationsTimeCounter.addAndGet(System.nanoTime() - time);
+//                locationsTimeCounter.addAndGet(System.nanoTime() - time);
             }
         } else
             response_404.map(response);
@@ -856,7 +856,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
     static String ip;
 
     public static void main(String[] args) {
-        Monitoring.initSystemMonitoring();
+//        Monitoring.initSystemMonitoring();
 //        ip = TextTools.find(exec("ip addr show eth0"), Pattern.compile("inet (\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})"), 1);
         ip = "localhost";
 
@@ -876,27 +876,27 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
 
 
         app.initConnections(10000);
-        System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds. Connections openned: " + connectionsCounter.get() + " total response time: " + requestTimeCounter.get() / 1000 / 1000 + " ms, requests made: " + requestCounter.get());
-        connectionsCounter.set(0);
-        requestTimeCounter.set(0);
-        requestCounter.set(0);
-        handleTimeCounter.set(0);
-        writeTimeCounter.set(0);
-        readTimeCounter.set(0);
-        uniqueConnections.clear();
-
-        userGetTimeCounter.set(0);
-        userNewTimeCounter.set(0);
-        userUpdateTimeCounter.set(0);
-        visitGetTimeCounter.set(0);
-        visitNewTimeCounter.set(0);
-        visitUpdateTimeCounter.set(0);
-        locationGetTimeCounter.set(0);
-        locationNewTimeCounter.set(0);
-        locationUpdateTimeCounter.set(0);
-
-        locationsTimeCounter.set(0);
-        visitsTimeCounter.set(0);
+//        System.out.println("warmUp finished in " + (System.currentTimeMillis() - time) / 1000f + " seconds. Connections openned: " + connectionsCounter.get() + " total response time: " + requestTimeCounter.get() / 1000 / 1000 + " ms, requests made: " + requestCounter.get());
+//        connectionsCounter.set(0);
+//        requestTimeCounter.set(0);
+//        requestCounter.set(0);
+//        handleTimeCounter.set(0);
+//        writeTimeCounter.set(0);
+//        readTimeCounter.set(0);
+//        uniqueConnections.clear();
+//
+//        userGetTimeCounter.set(0);
+//        userNewTimeCounter.set(0);
+//        userUpdateTimeCounter.set(0);
+//        visitGetTimeCounter.set(0);
+//        visitNewTimeCounter.set(0);
+//        visitUpdateTimeCounter.set(0);
+//        locationGetTimeCounter.set(0);
+//        locationNewTimeCounter.set(0);
+//        locationUpdateTimeCounter.set(0);
+//
+//        locationsTimeCounter.set(0);
+//        visitsTimeCounter.set(0);
         System.gc();
     }
 
@@ -950,17 +950,17 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         while ((System.currentTimeMillis() - time) / 1000 < seconds) {
             String exec;
             exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/users/" + user + "/visits"), "");
-            System.out.println("visits by user: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            System.out.println("visits by user: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
             exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/locations/" + location + "/avg"), "");
-            System.out.println("locations avg: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            System.out.println("locations avg: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
             exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/users/" + user), "");
-            System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            System.out.println("user by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
             exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/locations/" + location), "");
-            System.out.println("location by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            System.out.println("location by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
             exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 http://" + ip + ":" + app.getPort() + "/visits/" + visit), "");
-            System.out.println("visit by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            System.out.println("visit by id: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
             FileTools.text("/tmp/post.lua", "" +
                     "wrk.method = \"POST\"\n" +
@@ -968,7 +968,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
                     "wrk.headers[\"Content-Type\"] = \"application/json\"" +
                     "");
             exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 -s /tmp/post.lua http://" + ip + ":" + app.getPort() + "/users/" + user), "");
-            System.out.println("post user update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            System.out.println("post user update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
             FileTools.text("/tmp/post.lua", "" +
                     "wrk.method = \"POST\"\n" +
@@ -976,7 +976,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
                     "wrk.headers[\"Content-Type\"] = \"application/json\"" +
                     "");
             exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 -s /tmp/post.lua http://" + ip + ":" + app.getPort() + "/locations/" + location), "");
-            System.out.println("post location update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            System.out.println("post location update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
             FileTools.text("/tmp/post.lua", "" +
                     "wrk.method = \"POST\"\n" +
@@ -984,7 +984,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
                     "wrk.headers[\"Content-Type\"] = \"application/json\"" +
                     "");
             exec = Unchecked.ignore(() -> exec("/opt/wrk -c 32 -t 2 -d 1 -s /tmp/post.lua http://" + ip + ":" + app.getPort() + "/visits/" + visit), "");
-            System.out.println("post visit update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
+//            System.out.println("post visit update: " + TextTools.find(exec, Pattern.compile("Requests/sec:\\s+\\d+.\\d+")));
 
             Unchecked.ignore(() -> Thread.sleep(pause));
         }

@@ -102,26 +102,26 @@ public class Monitoring {
                 r.record(recorder);
             }
             StringBuilder sb = new StringBuilder();
-            sb.append("c:").append(App.connectionsCounter.get()).append(";");
-            sb.append("u:").append(App.uniqueConnections.size()).append(";");
-            sb.append("r:").append(App.requestTimeCounter.getAndSet(0)).append(";");
-            sb.append("rc:").append(App.requestCounter.getAndSet(0)).append(";");
-            sb.append("ht:").append(App.handleTimeCounter.getAndSet(0)).append(";");
-            sb.append("rt:").append(App.readTimeCounter.getAndSet(0)).append(";");
-            sb.append("wt:").append(App.writeTimeCounter.getAndSet(0)).append(";");
-
-            sb.append("ugt:").append(App.userGetTimeCounter.getAndSet(0)).append(";");
-            sb.append("unt:").append(App.userNewTimeCounter.getAndSet(0)).append(";");
-            sb.append("upt:").append(App.userUpdateTimeCounter.getAndSet(0)).append(";");
-            sb.append("lgt:").append(App.locationGetTimeCounter.getAndSet(0)).append(";");
-            sb.append("lnt:").append(App.locationNewTimeCounter.getAndSet(0)).append(";");
-            sb.append("lpt:").append(App.locationUpdateTimeCounter.getAndSet(0)).append(";");
-            sb.append("vgt:").append(App.visitGetTimeCounter.getAndSet(0)).append(";");
-            sb.append("vnt:").append(App.visitNewTimeCounter.getAndSet(0)).append(";");
-            sb.append("vpt:").append(App.visitUpdateTimeCounter.getAndSet(0)).append(";");
-
-            sb.append("vt:").append(App.visitsTimeCounter.getAndSet(0)).append(";");
-            sb.append("lt:").append(App.locationsTimeCounter.getAndSet(0)).append(";");
+//            sb.append("c:").append(App.connectionsCounter.get()).append(";");
+//            sb.append("u:").append(App.uniqueConnections.size()).append(";");
+//            sb.append("r:").append(App.requestTimeCounter.getAndSet(0)).append(";");
+//            sb.append("rc:").append(App.requestCounter.getAndSet(0)).append(";");
+//            sb.append("ht:").append(App.handleTimeCounter.getAndSet(0)).append(";");
+//            sb.append("rt:").append(App.readTimeCounter.getAndSet(0)).append(";");
+//            sb.append("wt:").append(App.writeTimeCounter.getAndSet(0)).append(";");
+//
+//            sb.append("ugt:").append(App.userGetTimeCounter.getAndSet(0)).append(";");
+//            sb.append("unt:").append(App.userNewTimeCounter.getAndSet(0)).append(";");
+//            sb.append("upt:").append(App.userUpdateTimeCounter.getAndSet(0)).append(";");
+//            sb.append("lgt:").append(App.locationGetTimeCounter.getAndSet(0)).append(";");
+//            sb.append("lnt:").append(App.locationNewTimeCounter.getAndSet(0)).append(";");
+//            sb.append("lpt:").append(App.locationUpdateTimeCounter.getAndSet(0)).append(";");
+//            sb.append("vgt:").append(App.visitGetTimeCounter.getAndSet(0)).append(";");
+//            sb.append("vnt:").append(App.visitNewTimeCounter.getAndSet(0)).append(";");
+//            sb.append("vpt:").append(App.visitUpdateTimeCounter.getAndSet(0)).append(";");
+//
+//            sb.append("vt:").append(App.visitsTimeCounter.getAndSet(0)).append(";");
+//            sb.append("lt:").append(App.locationsTimeCounter.getAndSet(0)).append(";");
 
             sb.append("gc:").append(client.events.get("jvm.gc.time").stream().mapToDouble(event -> Double.parseDouble(event.value)).sum()).append(";");
             sb.append("mu:").append(client.events.get("jvm.mp.used").stream().mapToLong(event -> Long.parseLong(event.value) / 1024 / 1024).sum()).append(";");
