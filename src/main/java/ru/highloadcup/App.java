@@ -12,19 +12,22 @@ import com.wizzardo.http.request.Header;
 import com.wizzardo.http.request.Request;
 import com.wizzardo.http.response.Response;
 import com.wizzardo.http.response.Status;
-import com.wizzardo.tools.interfaces.Mapper;
+import com.wizzardo.tools.interfaces.*;
+import com.wizzardo.tools.interfaces.Filter;
 import com.wizzardo.tools.io.FileTools;
 import com.wizzardo.tools.io.IOTools;
 import com.wizzardo.tools.json.JsonItem;
 import com.wizzardo.tools.json.JsonObject;
 import com.wizzardo.tools.json.JsonTools;
 import com.wizzardo.tools.misc.ExceptionDrivenStringBuilder;
+import com.wizzardo.tools.misc.NumberToChars;
 import com.wizzardo.tools.misc.TextTools;
 import com.wizzardo.tools.misc.Unchecked;
 import com.wizzardo.tools.misc.pool.Holder;
 import com.wizzardo.tools.misc.pool.Pool;
 import com.wizzardo.tools.misc.pool.PoolBuilder;
 import com.wizzardo.tools.misc.pool.SimpleHolder;
+import com.wizzardo.tools.reflection.StringReflection;
 import ru.highloadcup.domain.*;
 
 import java.io.*;
@@ -235,7 +238,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         a.setPort(port);
 
         //change pool queue if >0
-        a.setIoThreadsCount(3);
+        a.setIoThreadsCount(2);
 
         a.getUrlMapping()
                 .append("/users/$id/visits", new RestHandler().get((request, response) -> getVisitsByUser(request.param("id"), request, response)))
@@ -529,21 +532,73 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         if (visitList == null)
             return response_404.map(response);
 
-        Stream<VisitInfo> stream = visitList.stream();
+//        Stream<VisitInfo> stream = visitList.stream();
+//        try {
+//            stream = prepareLocationVisitsStream(request, stream);
+//        } catch (Exception e) {
+//            return response_400.map(response);
+//        }
+//
+//        OptionalDouble average = stream
+//                .mapToDouble(visitInfo -> visitInfo.visit.mark)
+//                .average();
+//
+//        double result = Math.round(average.orElse(0) * 100000) / 100000d;
+
+        double result;
         try {
-            stream = prepareLocationVisitsStream(request, stream);
+            result = calculateAveragemark(visitList, prepareLocationVisitsFilter(request));
         } catch (Exception e) {
             return response_400.map(response);
         }
 
-        OptionalDouble average = stream
-                .mapToDouble(visitInfo -> visitInfo.visit.mark)
-                .average();
+        Holder<byte[]> holder = byteArrayPool.holder();
+        byte[] bytes = holder.get();
+        bytes[0] = '{';
+        bytes[1] = '"';
+        bytes[2] = 'a';
+        bytes[3] = 'v';
+        bytes[4] = 'g';
+        bytes[5] = '"';
+        bytes[6] = ':';
+        String s = String.valueOf(result);
+        char[] chars = StringReflection.chars(s);
+        int length = chars.length;
+        for (int i = 0; i < length; i++) {
+            bytes[7 + i] = (byte) chars[i];
+        }
+        length += 7;
+        bytes[length] = '}';
+        length++;
 
-        double result = Math.round(average.orElse(0) * 100000) / 100000d;
+        return response.setBody(new ReadableByteArray(bytes, 0, length) {
+            @Override
+            public void close() {
+                holder.close();
+            }
+        });
+//        byte[] s = new ExceptionDrivenStringBuilder().append("{\"avg\":").append(result).append("}").toBytes();
+//        return response.setBody(s);
+    }
 
-        byte[] s = new ExceptionDrivenStringBuilder().append("{\"avg\":").append(result).append("}").toBytes();
-        return response.setBody(s);
+    private double calculateAveragemark(List<VisitInfo> visitList, Filter<VisitInfo> filter) {
+        double sum = 0;
+        int count = 0;
+        if (filter == null) {
+            count = visitList.size();
+            for (VisitInfo vi : visitList) {
+                sum += vi.visit.mark;
+            }
+        } else {
+            for (VisitInfo vi : visitList) {
+                if (filter.allow(vi)) {
+                    sum += vi.visit.mark;
+                    count++;
+                }
+            }
+        }
+
+        return Math.round(sum / count * 100000) / 100000d;
     }
 
     protected Response getVisitsByUser(String idString, Request request, Response response) {
@@ -678,6 +733,61 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
             }
         }
         return stream;
+    }
+
+    public Filter<VisitInfo> prepareLocationVisitsFilter(Request request) {
+        if (!request.hasParameters())
+            return null;
+
+        Filter<VisitInfo> filter = null;
+        for (Map.Entry<String, MultiValue> entry : request.params().entrySet()) {
+            String value = entry.getValue().value();
+            int hash = entry.getKey().hashCode();
+            if ("fromDate".hashCode() == hash) {
+                long fromDate = Long.parseLong(value);
+                if (filter == null)
+                    filter = visitInfo -> visitInfo.visit.visited_at > fromDate;
+                else {
+                    Filter<VisitInfo> finalFilter = filter;
+                    filter = visitInfo -> finalFilter.allow(visitInfo) && visitInfo.visit.visited_at > fromDate;
+                }
+            } else if ("toDate".hashCode() == hash) {
+                long toDate = Long.parseLong(value);
+                if (filter == null)
+                    filter = visitInfo -> visitInfo.visit.visited_at < toDate;
+                else {
+                    Filter<VisitInfo> finalFilter = filter;
+                    filter = visitInfo -> finalFilter.allow(visitInfo) && visitInfo.visit.visited_at < toDate;
+                }
+            } else if ("fromAge".hashCode() == hash) {
+                int fromAge = Integer.parseInt(value);
+                long ageValue = getSecondsFromAge(fromAge);
+                if (filter == null)
+                    filter = visitInfo -> visitInfo.user.birth_date < ageValue;
+                else {
+                    Filter<VisitInfo> finalFilter = filter;
+                    filter = visitInfo -> finalFilter.allow(visitInfo) && visitInfo.user.birth_date < ageValue;
+                }
+            } else if ("toAge".hashCode() == hash) {
+                int toAge = Integer.parseInt(value);
+                long ageValue = getSecondsFromAge(toAge);
+                if (filter == null)
+                    filter = visitInfo -> visitInfo.user.birth_date > ageValue;
+                else {
+                    Filter<VisitInfo> finalFilter = filter;
+                    filter = visitInfo -> finalFilter.allow(visitInfo) && visitInfo.user.birth_date > ageValue;
+                }
+            } else if ("gender".hashCode() == hash) {
+                User.Gender gender = User.Gender.valueOf(value);
+                if (filter == null)
+                    filter = visitInfo -> visitInfo.user.gender == gender;
+                else {
+                    Filter<VisitInfo> finalFilter = filter;
+                    filter = visitInfo -> finalFilter.allow(visitInfo) && visitInfo.user.gender == gender;
+                }
+            }
+        }
+        return filter;
     }
 
     public Stream<VisitInfo> prepareUserVisitsStream(Request request, Stream<VisitInfo> stream) {
@@ -887,7 +997,7 @@ public class App extends HttpServer<App.MeasuredHttpConnection> {
         Users users = new Users();
         Visits visits = new Visits();
         AtomicLong sizeCounter = new AtomicLong();
-        boolean limitData = false;
+        boolean limitData = Boolean.parseBoolean(System.getProperty("limitData", "false"));
         Unchecked.run(() -> {
             if (!zipFile.exists())
                 return;
